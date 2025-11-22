@@ -1,0 +1,6 @@
+*
+
+!.gitignore
+!config
+!setup.ps1
+!setup.sh
