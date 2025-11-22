@@ -1,0 +1,71 @@
+Host github.com
+  User git
+  Port 22
+  HostName github.com
+  IdentityFile ~/.ssh/github
+  TCPKeepAlive yes
+  IdentitiesOnly yes
+Host agrilasa
+  HostName 13.220.253.63
+  Port 22
+  User agrilasa-site
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+  # VMaQyZVtez90Vf4O3tNm
+Host alenro
+  HostName ec2-44-203-34-213.compute-1.amazonaws.com
+  Port 22
+  User alenro-asignaciones
+  IdentityFile ~/.ssh/alenro.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host courban
+  HostName 44.223.173.145
+  Port 22
+  User ubuntu
+  IdentityFile ~/.ssh/courban.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host grupo-orion
+  HostName 44.199.211.221
+  Port 22
+  User sites
+  IdentityFile ~/.ssh/grupo-orion.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host lever
+  HostName 3.227.233.127
+  Port 22
+  User ubuntu
+  IdentityFile ~/.ssh/lever.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host lever-old
+  HostName 3.143.157.35
+  Port 22
+  User ubuntu
+  IdentityFile ~/.ssh/lever-old.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host lomax-store
+  HostName 98.93.54.14
+  Port 22
+  User ubuntu
+  IdentityFile ~/.ssh/lomax-store.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
+Host sifupgua
+  HostName 54.196.166.111
+  Port 22
+  User pcabrera
+  IdentityFile ~/.ssh/sifupgua.pem
+  IdentitiesOnly yes
+  PreferredAuthentications publickey
+  IdentitiesOnly yes
