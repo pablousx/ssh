@@ -69,11 +69,21 @@ function Unlock-BitwardenVault {
 
         if ($LASTEXITCODE -eq 0) {
             $env:BW_SESSION = $unlockOutput
-            Write-Host "✅ Vault unlocked successfully!" -ForegroundColor Green
+            Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
         } else {
-            Write-Host "❌ Failed to unlock vault" -ForegroundColor Red
+            Write-Host "[ERROR] Failed to unlock vault" -ForegroundColor Red
             throw "Failed to unlock Bitwarden vault"
         }
+    }
+}
+
+function Ensure-BitwardenCli {
+    # Confirm Bitwarden CLI is available before continuing
+    if (-not (Get-Command bw -ErrorAction SilentlyContinue)) {
+        Write-Host "Bitwarden CLI (bw) not found." -ForegroundColor Red
+        Write-Host "Install using: winget install Bitwarden.CLI" -ForegroundColor Yellow
+        Write-Host "Or download a release from: https://github.com/bitwarden/clients/releases" -ForegroundColor Yellow
+        throw "Missing Bitwarden CLI"
     }
 }
 
@@ -196,6 +206,7 @@ function Sync-SSH {
     )
 
     try {
+        Ensure-BitwardenCli
         # Initialize directories and config
         $config = Initialize-SshConfig -OutputDir $OutputDir
 
@@ -224,11 +235,10 @@ function Sync-SSH {
             }
         }
 
-        Write-Host "`n✅ Done! Saved $processedCount SSH keys and updated config!" -ForegroundColor Green
+        Write-Host "`n[OK] Done! Saved $processedCount SSH keys and updated config!" -ForegroundColor Green
     }
     catch {
-        Write-Host "`n❌ Error: $_" -ForegroundColor Red
-        exit 1
+        Write-Host "`n> Error: $_" -ForegroundColor Red
     }
 }
 
