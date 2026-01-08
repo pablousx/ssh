@@ -1,6 +1,6 @@
 *
 
 !.gitignore
-!config
+!README.md
 !setup.ps1
-!setup.sh
+!sync.ps1

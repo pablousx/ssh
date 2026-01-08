@@ -1,38 +1,63 @@
 Host *
   Port 22
   AddKeysToAgent yes
-Host github.com
-  User git
-  HostName github.com
-  TCPKeepAlive yes
-Host agrilasa
-  HostName ec2-13-220-253-63.compute-1.amazonaws.com
-  User agrilasa-site
-  # VMaQyZVtez90Vf4O3tNm
+
 Host alenro
   HostName ec2-44-203-34-213.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\alenro.pub
+  IdentitiesOnly yes
   User alenro-asignaciones
-Host courban
-  HostName 44.223.173.145
-  User ubuntu
-Host grupo-orion
-  HostName ec2-44-199-211-221.compute-1.amazonaws.com
-  User sites
-Host lever
-  HostName ec2-3-227-233-127.compute-1.amazonaws.com
-  User ubuntu
-Host lever-old
-  HostName 3.143.157.35
-  User ubuntu
-Host lomax-store
-  HostName ec2-98-93-54-14.compute-1.amazonaws.com
-  User ubuntu
-Host sifupgua
-  # HostName ec2-54-196-166-111.compute-1.amazonaws.com
-  HostName 54.196.166.111
-  User pcabrera
-  # PENDING
+
 Host lomax
   HostName ec2-3-85-169-141.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\lomax.pub
+  IdentitiesOnly yes
   User ubuntu
-  # PENDING
+
+Host sifupgua
+  HostName ec2-54-196-166-111.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\sifupgua.pub
+  IdentitiesOnly yes
+  User pcabrera
+
+Host rabyt
+  HostName ec2-98-93-54-14.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\rabyt.pub
+  IdentitiesOnly yes
+  User ubuntu
+
+Host lever
+  HostName ec2-3-227-233-127.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\lever.pub
+  IdentitiesOnly yes
+  User ubuntu
+
+Host github
+  HostName github.com
+  IdentityFile C:\Users\Pablo\ssh\keys\github.pub
+  IdentitiesOnly yes
+  User git
+
+Host grupo-orion
+  HostName ec2-44-199-211-221.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\grupo-orion.pub
+  IdentitiesOnly yes
+  User sites
+
+Host courban
+  HostName 44.223.173.145
+  IdentityFile C:\Users\Pablo\ssh\keys\courban.pub
+  IdentitiesOnly yes
+  User ubuntu
+
+Host mine
+  HostName ec2-18-188-220-161.us-east-2.compute.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\mine.pub
+  IdentitiesOnly yes
+  User ubuntu
+
+Host agrilasa
+  HostName ec2-13-220-253-63.compute-1.amazonaws.com
+  IdentityFile C:\Users\Pablo\ssh\keys\agrilasa.pub
+  IdentitiesOnly yes
+  User agrilasa-site
