@@ -26,13 +26,19 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
 
 ### Setup
 
-1. **Run setup** (adds Sync-SSH to your PowerShell profile):
+1. **Clone the repository**:
+
+  ```powershell
+  git clone https://github.com/pablousx/ssh $HOME/ssh && cd $HOME/ssh
+  ```
+
+2. **Run setup** (adds Sync-SSH to your PowerShell profile):
 
    ```powershell
    .\setup.ps1
    ```
 
-2. **Sync your keys**:
+3. **Sync your keys**:
 
    ```powershell
    Sync-SSH
@@ -44,7 +50,7 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
    .\sync.ps1
    ```
 
-3. **Connect** using the SSH key name from Bitwarden:
+4. **Connect** using the SSH key name from Bitwarden:
    ```powershell
    ssh keyname
    ```
