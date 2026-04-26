@@ -1,46 +1,44 @@
 #!/bin/bash
 
-# =========== SSH Config Setup Script ===========
+# Detect environment
+IS_WSL=false
+if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$WSL_INTEROP" ] || [ -f /proc/version ] && grep -qi microsoft /proc/version; then
+    IS_WSL=true
+fi
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-SYNC_SCRIPT="$SCRIPT_DIR/sync.sh"
+# Paths
+REPO_ROOT=$(realpath "$(dirname "$0")/..")
+SYNC_SH="$REPO_ROOT/linux/sync.sh"
+SYNC_PS1="$REPO_ROOT/windows/sync.ps1"
+CONFIG_FILE="$HOME/.ssh/sync-ssh-env.sh"
 
-add_to_shell_profile() {
-    local PROFILE_FILE=""
-    
-    # Detect shell
-    if [[ "$SHELL" == */zsh ]]; then
-        PROFILE_FILE="$HOME/.zshrc"
-    else
-        PROFILE_FILE="$HOME/.bashrc"
-    fi
+mkdir -p "$HOME/.ssh"
 
-    local ALIAS_LINE="alias sync-ssh='$SYNC_SCRIPT'"
+echo "# Managed by Sync-SSH (ssh repo)" > "$CONFIG_FILE"
 
-    if [ -f "$PROFILE_FILE" ]; then
-        if ! grep -q "alias sync-ssh" "$PROFILE_FILE"; then
-            echo -e "\n# Sync SSH keys from Bitwarden\n$ALIAS_LINE" >> "$PROFILE_FILE"
-            echo -e "\e[32m[OK] Added sync-ssh alias to $PROFILE_FILE\e[0m"
-            echo -e "\e[36m   Restart your terminal or run: source $PROFILE_FILE\e[0m"
-        else
-            echo -e "\e[37m[INFO] sync-ssh alias already in $PROFILE_FILE, skipping.\e[0m"
-        fi
-    else
-        echo -e "\e[31m[ERROR] Could not find profile file ($PROFILE_FILE)\e[0m"
-    fi
-}
+if [ "$IS_WSL" = true ]; then
+    echo "Configuring WSL for Windows SSH Agent..."
 
-echo "========================================"
-echo "  SSH Config with Bitwarden - Setup"
-echo "========================================="
-echo ""
+    cat <<EOF >> "$CONFIG_FILE"
+# WSL-specific: Use Windows OpenSSH Agent
+alias ssh='ssh.exe'
+alias ssh-add='ssh-add.exe'
+alias scp='scp.exe'
+alias sftp='sftp.exe'
+alias sync-ssh='powershell.exe "Sync-SSH"'
 
-# Make sync script executable
-chmod +x "$SYNC_SCRIPT"
+# Ensure git uses Windows SSH
+git config --global core.sshCommand "ssh.exe"
+EOF
+else
+    echo "Configuring Linux for Native SSH Agent..."
 
-# Add alias to profile
-add_to_shell_profile
+    cat <<EOF >> "$CONFIG_FILE"
+# Linux-specific: Use native SSH Agent
+alias sync-ssh='bash "$SYNC_SH"'
+EOF
+fi
 
-echo ""
-echo -e "\e[32mSetup complete!\e[0m"
-echo -e "\e[36m   Run 'sync-ssh' to sync your SSH keys\e[0m"
+echo "Created $CONFIG_FILE"
+echo "Please add the following line to your .zshrc or .bashrc:"
+echo "source $CONFIG_FILE"

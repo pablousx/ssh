@@ -58,9 +58,11 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
 
 ---
 
-### Linux Setup
+### Linux & WSL Setup
 
-2. **Run setup** (adds `sync-ssh` alias to your `.bashrc` or `.zshrc`):
+The Linux setup script is environment-aware and will configure your shell differently depending on whether you are on native Linux or WSL.
+
+2. **Run setup**:
    ```bash
    cd $HOME/ssh/linux
    chmod +x setup.sh
@@ -69,7 +71,7 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
 
 3. **Source your shell** and sync your keys:
    ```bash
-   source ~/.bashrc
+   source ~/.zshrc  # or ~/.bashrc
    sync-ssh
    ```
 
@@ -77,6 +79,19 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
    ```bash
    ssh <keyname>
    ```
+
+---
+
+## WSL Support
+
+WSL handles SSH differently to ensure seamless integration with the Windows environment. 
+
+> [!IMPORTANT]
+> For WSL, you must follow the **Windows Setup** instructions first, then proceed with the **Linux Setup**.
+
+- **Windows Agent Access**: Since WSL cannot directly access the Bitwarden SSH agent pipe, the setup script configures aliases to use `ssh.exe` and `ssh-add.exe` directly. This allows WSL to talk to the Windows OpenSSH agent.
+- **Unified Synchronization**: Running `sync-ssh` in WSL triggers the `Sync-SSH` function in Windows PowerShell. This ensures that your SSH configuration is synchronized in your Windows profile, which `ssh.exe` uses.
+- **Git Compatibility**: The setup automatically configures Git globally in WSL (`core.sshCommand = ssh.exe`) so your keys work for Git operations out of the box.
 
 ---
 
@@ -92,8 +107,10 @@ For each SSH key in Bitwarden, create an SSH Key item (type 5) with:
   - `User`: SSH username (e.g., `ubuntu`, `root`)
 
 
-The script manages a section in your `~/.ssh/config` file marked with:
+The scripts manage a section in your SSH `config` file marked with:
 `# --- START SYNC-SSH MANAGED SECTION ---`
+
+On native Linux, this is `~/.ssh/config`. On Windows/WSL, this is `%USERPROFILE%\.ssh\config`.
 
 It creates entries like:
 
@@ -109,12 +126,12 @@ Host example
 
 ```
 .
+├── setup.sh             # Environment-aware setup script (Linux/WSL)
 ├── windows/
 │   ├── sync.ps1         # Windows sync script
 │   └── setup.ps1        # PowerShell profile setup
 └── linux/
-    ├── sync.sh          # Linux sync script (Bash)
-    └── setup.sh         # Linux setup script
+    └── sync.sh          # Native Linux sync script (Bash)
 ```
 
 ## Features

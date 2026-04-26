@@ -11,19 +11,19 @@ DOT_SSH_CONFIG="$HOME/.ssh/config"
 # =========== Functions ===========
 
 log_info() {
-    echo -e "\e[36m$1\e[0m"
+    echo -e "\e[36m$1\e[0m" >&2
 }
 
 log_success() {
-    echo -e "\e[32m$1\e[0m"
+    echo -e "\e[32m$1\e[0m" >&2
 }
 
 log_warn() {
-    echo -e "\e[33m$1\e[0m"
+    echo -e "\e[33m$1\e[0m" >&2
 }
 
 log_error() {
-    echo -e "\e[31m$1\e[0m"
+    echo -e "\e[31m$1\e[0m" >&2
 }
 
 ensure_dependencies() {
@@ -50,31 +50,36 @@ initialize_ssh_config() {
     fi
 
     # Ensure markers exist
-    if ! grep -q "$SYNC_START_MARKER" "$SSH_CONFIG_FILE"; then
+    if ! grep -qF "$SYNC_START_MARKER" "$SSH_CONFIG_FILE"; then
         log_info "Adding managed section markers to $SSH_CONFIG_FILE"
         echo -e "\n$SYNC_START_MARKER\n# This section is automatically generated. Manual changes will be lost.\n$SYNC_END_MARKER" >> "$SSH_CONFIG_FILE"
     fi
 
-    # Link ~/.ssh/config to our config
-    if [ -f "$DOT_SSH_CONFIG" ]; then
-        if [ ! "$DOT_SSH_CONFIG" -ef "$SSH_CONFIG_FILE" ]; then
+    # Link ~/.ssh/config to our config if they are different files
+    if [ "$DOT_SSH_CONFIG" != "$SSH_CONFIG_FILE" ]; then
+        if [ -f "$DOT_SSH_CONFIG" ] && [ ! "$DOT_SSH_CONFIG" -ef "$SSH_CONFIG_FILE" ]; then
             log_warn "Backing up existing $DOT_SSH_CONFIG to $DOT_SSH_CONFIG.bak"
             mv "$DOT_SSH_CONFIG" "$DOT_SSH_CONFIG.bak"
         fi
-    fi
 
-    if [ ! -e "$DOT_SSH_CONFIG" ]; then
-        if ln "$SSH_CONFIG_FILE" "$DOT_SSH_CONFIG" 2>/dev/null; then
-            log_success "Hard linked $DOT_SSH_CONFIG -> $SSH_CONFIG_FILE"
-        else
-            ln -s "$SSH_CONFIG_FILE" "$DOT_SSH_CONFIG"
-            log_success "Symbolic linked $DOT_SSH_CONFIG -> $SSH_CONFIG_FILE"
+        if [ ! -e "$DOT_SSH_CONFIG" ]; then
+            if ln "$SSH_CONFIG_FILE" "$DOT_SSH_CONFIG" 2>/dev/null; then
+                log_success "Hard linked $DOT_SSH_CONFIG -> $SSH_CONFIG_FILE"
+            else
+                ln -s "$SSH_CONFIG_FILE" "$DOT_SSH_CONFIG"
+                log_success "Symbolic linked $DOT_SSH_CONFIG -> $SSH_CONFIG_FILE"
+            fi
         fi
     fi
 }
 
 unlock_vault() {
     STATUS=$(bw status | jq -r '.status')
+
+    if [ "$STATUS" = "unauthenticated" ]; then
+        log_error "[ERROR] Bitwarden is not logged in. Please run 'bw login' first."
+        exit 1
+    fi
 
     if [ "$STATUS" != "unlocked" ]; then
         log_warn "Bitwarden Vault: $STATUS"
@@ -95,8 +100,8 @@ get_bitwarden_keys() {
     bw sync > /dev/null
 
     log_info "Fetching items from Bitwarden..."
-    # Type 5 is SSH Key
-    bw list items | jq -c '.[] | select(.type == 5) | {name: .name, hostname: (.fields[]? | select(.name == "HostName") | .value), user: (.fields[]? | select(.name == "User") | .value)}'
+    # Type 5 is SSH Key. Return an array of objects for easier lookup.
+    bw list items | jq -c '[.[] | select(.type == 5) | {name: .name, hostname: (.fields[]? | select(.name == "HostName") | .value), user: (.fields[]? | select(.name == "User") | .value)}]'
 }
 
 sync_ssh() {
@@ -104,62 +109,57 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
-    # Detect if running in WSL
-    IS_WSL=false
-    if grep -qi microsoft /proc/version 2>/dev/null; then
-        IS_WSL=true
+    # Ensure we are not in WSL (WSL should use windows/sync.ps1 via powershell.exe)
+    if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$WSL_INTEROP" ] || grep -qi microsoft /proc/version 2>/dev/null; then
+        log_error "This script is for native Linux only. On WSL, please use 'sync-ssh' which calls the Windows version."
+        return 1
     fi
 
-    # Get keys from agent (Use ssh-add.exe in WSL to reach Windows agent if needed)
-    if [ "$IS_WSL" = true ] && command -v ssh-add.exe &> /dev/null; then
-        log_info "WSL detected, using ssh-add.exe"
-        AGENT_KEYS=$(ssh-add.exe -L 2>/dev/null | tr -d '\r')
-    else
-        AGENT_KEYS=$(ssh-add -L 2>/dev/null)
-    fi
+    # Get keys from native SSH agent
+    AGENT_KEYS=$(ssh-add -L 2>/dev/null)
     EXIT_CODE=$?
 
-    if [ $EXIT_CODE -ne 0 ] && [ -z "$AGENT_KEYS" ]; then
-        log_error "Error: ssh-add -L failed (Exit code: $EXIT_CODE)"
-        log_warn "Make sure your SSH agent is running (check SSH_AUTH_SOCK)."
+    if [ $EXIT_CODE -ne 0 ] || [ -z "$AGENT_KEYS" ] || [[ "$AGENT_KEYS" == "The agent has no identities"* ]]; then
+        log_error "Error: No keys found in ssh-agent or agent not responding."
+        log_warn "Make sure your SSH agent is running and has keys loaded with: ssh-add"
         return 1
     fi
 
-    if [ -z "$AGENT_KEYS" ] || [[ "$AGENT_KEYS" == "The agent has no identities"* ]]; then
-        log_error "Error: No keys found in ssh-agent."
-        log_warn "Make sure you have keys loaded with: ssh-add"
-        return 1
-    fi
-
-    # Get Bitwarden data into a temporary file for processing
+    # Get Bitwarden data as a JSON array
     BW_DATA=$(get_bitwarden_keys)
 
     NEW_MANAGED_CONTENT=""
     PROCESSED_COUNT=0
 
-    while read -r KEY_LINE || [ -n "$KEY_LINE" ]; do
-        if [ -z "$KEY_LINE" ] || [[ "$KEY_LINE" == "The agent has no identities"* ]]; then
-            continue
-        fi
+    # Process each key from agent
+    while read -r KEY_LINE; do
+        [ -z "$KEY_LINE" ] && continue
+        [[ "$KEY_LINE" == "The agent has no identities"* ]] && continue
 
-        # ssh-add -L output: [type] [key] [comment]
+        # Parts: [type] [key-blob] [comment]
+        # awk handles the first two, cut gets the rest (comment may have spaces)
         TYPE=$(echo "$KEY_LINE" | awk '{print $1}')
-        DATA=$(echo "$KEY_LINE" | awk '{print $2}')
         COMMENT=$(echo "$KEY_LINE" | cut -d' ' -f3-)
 
-        # Find match in BW data
-        MATCH=$(echo "$BW_DATA" | jq -r -s --arg comment "$COMMENT" '.[] | select(.name == $comment)')
+        # Reset variables for this key
+        HOSTNAME=""
+        USER=""
+        MATCH=""
+
+        # Find match in BW data array
+        MATCH=$(echo "$BW_DATA" | jq -c --arg comment "$COMMENT" '.[] | select(.name == $comment)' | head -n 1)
 
         if [ -n "$MATCH" ]; then
             HOSTNAME=$(echo "$MATCH" | jq -r '.hostname // empty')
             USER=$(echo "$MATCH" | jq -r '.user // empty')
         fi
 
-        if [ -z "$HOSTNAME" ]; then
+        # Fallback if no Bitwarden metadata
+        if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "null" ]; then
             HOSTNAME="$COMMENT"
         fi
 
-        # Sanitize name
+        # Sanitize Host alias (safeName)
         SAFE_NAME=$(echo "$COMMENT" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
         if [ -z "$SAFE_NAME" ]; then
             SAFE_NAME="ssh-key-$RANDOM"
@@ -181,22 +181,24 @@ sync_ssh() {
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
     done <<< "$AGENT_KEYS"
 
-    # Update config file
-    # We use a temporary file to rebuild the content
+    # Update config file using awk for reliable block replacement
     TEMP_CONFIG=$(mktemp)
+    MANAGED_FILE=$(mktemp)
+    echo -e "$NEW_MANAGED_CONTENT" > "$MANAGED_FILE"
 
-    # Extract everything before the start marker
-    sed -n "1,/$SYNC_START_MARKER/p" "$SSH_CONFIG_FILE" | grep -v "$SYNC_START_MARKER" > "$TEMP_CONFIG"
+    awk -v start="$SYNC_START_MARKER" -v end="$SYNC_END_MARKER" -v managed="$MANAGED_FILE" '
+    BEGIN { p=1 }
+    $0 == start { 
+        print $0; 
+        print "# This section is automatically generated. Manual changes will be lost.";
+        while ((getline line < managed) > 0) { print line }
+        p=0 
+    }
+    $0 == end { p=1; print $0; next }
+    p { print $0 }
+    ' "$SSH_CONFIG_FILE" > "$TEMP_CONFIG"
 
-    # Add new managed section
-    echo "$SYNC_START_MARKER" >> "$TEMP_CONFIG"
-    echo "# This section is automatically generated. Manual changes will be lost." >> "$TEMP_CONFIG"
-    echo -e "$NEW_MANAGED_CONTENT" >> "$TEMP_CONFIG"
-    echo "$SYNC_END_MARKER" >> "$TEMP_CONFIG"
-
-    # Extract everything after the end marker
-    sed -n "/$SYNC_END_MARKER/,\$p" "$SSH_CONFIG_FILE" | grep -v "$SYNC_END_MARKER" >> "$TEMP_CONFIG"
-
+    rm "$MANAGED_FILE"
     mv "$TEMP_CONFIG" "$SSH_CONFIG_FILE"
     chmod 600 "$SSH_CONFIG_FILE"
 
