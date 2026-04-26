@@ -148,7 +148,7 @@ sync_ssh() {
         COMMENT=$(echo "$KEY_LINE" | cut -d' ' -f3-)
 
         # Find match in BW data
-        MATCH=$(echo "$BW_DATA" | jq -r -s --arg comment "$COMMENT" '.[] | select(.name == $arg)')
+        MATCH=$(echo "$BW_DATA" | jq -r -s --arg comment "$COMMENT" '.[] | select(.name == $comment)')
 
         if [ -n "$MATCH" ]; then
             HOSTNAME=$(echo "$MATCH" | jq -r '.hostname // empty')
