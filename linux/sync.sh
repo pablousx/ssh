@@ -104,8 +104,19 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
-    # Get keys from agent
-    AGENT_KEYS=$(ssh-add -L 2>/dev/null)
+    # Detect if running in WSL
+    IS_WSL=false
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        IS_WSL=true
+    fi
+
+    # Get keys from agent (Use ssh-add.exe in WSL to reach Windows agent if needed)
+    if [ "$IS_WSL" = true ] && command -v ssh-add.exe &> /dev/null; then
+        log_info "WSL detected, using ssh-add.exe"
+        AGENT_KEYS=$(ssh-add.exe -L 2>/dev/null | tr -d '\r')
+    else
+        AGENT_KEYS=$(ssh-add -L 2>/dev/null)
+    fi
     EXIT_CODE=$?
 
     if [ $EXIT_CODE -ne 0 ] && [ -z "$AGENT_KEYS" ]; then

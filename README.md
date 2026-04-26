@@ -1,6 +1,6 @@
 # SSH Config with Bitwarden
 
-Automatically sync SSH keys from ssh-agent with Bitwarden metadata to create an organized SSH config file. Works on Windows (PowerShell) and Linux (Bash).
+Automatically sync SSH keys from ssh-agent with Bitwarden metadata to create an organized SSH config file. Works on Windows (PowerShell), Linux (Bash), and WSL.
 
 ## What It Does
 
@@ -121,7 +121,7 @@ Host example
 
 - ✅ No Bitwarden premium required
 - ✅ Automatic Bitwarden vault unlock
-- ✅ Cross-platform: Windows (PowerShell) and Linux (Bash)
+- ✅ Cross-platform: Windows (PowerShell), Linux (Bash), and WSL
 - ✅ Managed config block (safe for manual edits)
 - ✅ Syncs updates and deletions from Bitwarden
 - ✅ Idempotent—safe to run multiple times
