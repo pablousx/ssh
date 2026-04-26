@@ -1,8 +1,1 @@
-# Ignore everything
-*
-
-# Except these files
-!.gitignore
-!README.md
-!setup.ps1
-!sync.ps1
+*.log
