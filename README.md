@@ -41,7 +41,7 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
 2. **Run setup** (adds Sync-SSH to your PowerShell profile):
 
    ```powershell
-   cd windows
+   cd $HOME/ssh/windows
    .\setup.ps1
    ```
 
@@ -62,7 +62,7 @@ No premium Bitwarden features required—uses public keys from ssh-agent instead
 
 2. **Run setup** (adds `sync-ssh` alias to your `.bashrc` or `.zshrc`):
    ```bash
-   cd linux
+   cd $HOME/ssh/linux
    chmod +x setup.sh
    ./setup.sh
    ```

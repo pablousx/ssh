@@ -106,19 +106,27 @@ sync_ssh() {
 
     # Get keys from agent
     AGENT_KEYS=$(ssh-add -L 2>/dev/null)
-    if [ $? -ne 0 ] || [ -z "$AGENT_KEYS" ]; then
-        log_error "Error: No keys found in ssh-agent or agent not running."
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ] && [ -z "$AGENT_KEYS" ]; then
+        log_error "Error: ssh-add -L failed (Exit code: $EXIT_CODE)"
+        log_warn "Make sure your SSH agent is running (check SSH_AUTH_SOCK)."
+        return 1
+    fi
+
+    if [ -z "$AGENT_KEYS" ] || [[ "$AGENT_KEYS" == "The agent has no identities"* ]]; then
+        log_error "Error: No keys found in ssh-agent."
         log_warn "Make sure you have keys loaded with: ssh-add"
         return 1
     fi
 
     # Get Bitwarden data into a temporary file for processing
     BW_DATA=$(get_bitwarden_keys)
-    
+
     NEW_MANAGED_CONTENT=""
     PROCESSED_COUNT=0
 
-    while read -r KEY_LINE; do
+    while read -r KEY_LINE || [ -n "$KEY_LINE" ]; do
         if [ -z "$KEY_LINE" ] || [[ "$KEY_LINE" == "The agent has no identities"* ]]; then
             continue
         fi
@@ -165,16 +173,16 @@ sync_ssh() {
     # Update config file
     # We use a temporary file to rebuild the content
     TEMP_CONFIG=$(mktemp)
-    
+
     # Extract everything before the start marker
     sed -n "1,/$SYNC_START_MARKER/p" "$SSH_CONFIG_FILE" | grep -v "$SYNC_START_MARKER" > "$TEMP_CONFIG"
-    
+
     # Add new managed section
     echo "$SYNC_START_MARKER" >> "$TEMP_CONFIG"
     echo "# This section is automatically generated. Manual changes will be lost." >> "$TEMP_CONFIG"
     echo -e "$NEW_MANAGED_CONTENT" >> "$TEMP_CONFIG"
     echo "$SYNC_END_MARKER" >> "$TEMP_CONFIG"
-    
+
     # Extract everything after the end marker
     sed -n "/$SYNC_END_MARKER/,\$p" "$SSH_CONFIG_FILE" | grep -v "$SYNC_END_MARKER" >> "$TEMP_CONFIG"
 
