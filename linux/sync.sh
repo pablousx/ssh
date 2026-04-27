@@ -109,12 +109,6 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
-    # Ensure we are not in WSL (WSL should use windows/sync.ps1 via powershell.exe)
-    if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$WSL_INTEROP" ] || grep -qi microsoft /proc/version 2>/dev/null; then
-        log_error "This script is for native Linux only. On WSL, please use 'sync-ssh' which calls the Windows version."
-        return 1
-    fi
-
     # Get keys from native SSH agent
     AGENT_KEYS=$(ssh-add -L 2>/dev/null)
     EXIT_CODE=$?
@@ -188,11 +182,11 @@ sync_ssh() {
 
     awk -v start="$SYNC_START_MARKER" -v end="$SYNC_END_MARKER" -v managed="$MANAGED_FILE" '
     BEGIN { p=1 }
-    $0 == start { 
-        print $0; 
+    $0 == start {
+        print $0;
         print "# This section is automatically generated. Manual changes will be lost.";
         while ((getline line < managed) > 0) { print line }
-        p=0 
+        p=0
     }
     $0 == end { p=1; print $0; next }
     p { print $0 }

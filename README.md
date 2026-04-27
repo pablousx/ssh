@@ -34,8 +34,24 @@ To allow the sync to work, your Bitwarden items must be configured correctly.
 - [Bitwarden Desktop](https://bitwarden.com/download/) (with [SSH Agent enabled](https://bitwarden.com/help/ssh-agent/))
 - [Bitwarden CLI](https://bitwarden.com/help/cli/) (`bw`)
   - Must be logged in: `bw login`
-- `jq` (Required for **Native Linux** only)
+- `jq` (Required for **Linux & WSL**)
 - `git`
+- **WSL only**: `socat` (`sudo apt install socat -y`)
+- **WSL only**: `npiperelay.exe` — Binaries are not available, so you must **build it from source** (requires [Go](https://go.dev/doc/install)):
+  ```bash
+  # 1. Install Go (https://go.dev/doc/install)
+  sudo apt update && sudo apt install golang-go -y
+
+  # 2. Clone the repo
+  git clone https://github.com/jstarks/npiperelay $HOME/npiperelay
+
+  # 3. Build the Windows binary from WSL
+  cd $HOME/npiperelay
+  GOOS=windows go build -o /mnt/c/tools/npiperelay.exe .
+
+  # 4. Symlink it into your WSL path
+  sudo ln -s /mnt/c/tools/npiperelay.exe /usr/local/bin/npiperelay.exe
+  ```
 
 ---
 
@@ -98,9 +114,28 @@ WSL handles SSH differently to ensure seamless integration with your Windows env
 > [!IMPORTANT]
 > **For WSL**, you should complete the **Windows Setup** first, then run the **Linux Setup** inside your WSL distro.
 
-- **Windows Agent Bridge**: WSL cannot natively access the Bitwarden SSH agent pipe. The setup script fixes this by aliasing `ssh`, `ssh-add`, and `git` to use their Windows versions (`ssh.exe`, etc.) directly. This allows you to use the keys loaded in your Windows Bitwarden instance from within Linux.
-- **Cross-Sync**: Running `sync-ssh` in WSL actually triggers the Windows PowerShell logic. This ensures your SSH configuration is synchronized in your Windows user profile, which is what the `ssh.exe` binaries use.
-- **Identity Files**: For each key, a `.pub` file is created in `~/.ssh/keys/` (or the Windows equivalent). These files are used in your config as `IdentityFile` entries, which tells SSH to look for the matching private key inside the agent.
+### How it works
+
+The setup script creates a **Unix socket bridge** that connects your Linux environment to the Windows SSH agent:
+
+```
+Linux ssh → $SSH_AUTH_SOCK (Unix socket) → socat → npiperelay.exe → Bitwarden named pipe
+```
+
+This means native Linux tools (`xxh`, `rsync`, `git`, SSH agent forwarding) all work correctly.
+
+| Feature | Status |
+| :--- | :---: |
+| SSH agent works | ✅ |
+| `xxh` (portable shell) | ✅ |
+| SSH agent forwarding (`-A`) | ✅ |
+| `rsync` native | ✅ |
+| `git` native SSH ops | ✅ |
+| Works when Bitwarden is closed | ❌ |
+
+### Prerequisite: `socat` + `npiperelay.exe`
+
+See the [Prerequisites](#️-prerequisites) section above.
 
 ---
 
