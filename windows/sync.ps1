@@ -29,11 +29,9 @@ function Initialize-SshConfig {
     icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
     icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
 
-    # Take ownership and reset individual key permissions to inherit from strict folder permissions
-    if (Test-Path "$KeysDir\*.pub") {
-        takeown /f "$KeysDir\*.pub" | Out-Null
-        icacls "$KeysDir\*.pub" /reset | Out-Null
-    }
+    # Unconditionally take ownership and reset all file permissions in the keys directory recursively
+    takeown /f "$KeysDir" /r /d y 2>$null | Out-Null
+    icacls "$KeysDir\*" /reset /t 2>$null | Out-Null
 
     # Ensure the config file exists
     if (-not (Test-Path $SshConfig)) {
@@ -207,6 +205,7 @@ function Get-SshConfigEntry {
     $newPubContent = "$KeyData $Type $Comment"
     $shouldWrite = $true
     if (Test-Path $pubkeyFile) {
+        Set-ItemProperty -Path $pubkeyFile -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         $currentPubContent = Get-Content -Path $pubkeyFile -Raw -ErrorAction SilentlyContinue
         if ($currentPubContent -and $currentPubContent.Trim() -eq $newPubContent.Trim()) {
             $shouldWrite = $false
@@ -266,6 +265,7 @@ function Sync-SSH {
                 $newSignPubContent = $gitSignMatch.publicKey.Trim()
                 $shouldWriteSign = $true
                 if (Test-Path $signPub) {
+                    Set-ItemProperty -Path $signPub -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                     $currentSignPub = Get-Content -Path $signPub -Raw -ErrorAction SilentlyContinue
                     if ($currentSignPub -and $currentSignPub.Trim() -eq $newSignPubContent) {
                         $shouldWriteSign = $false
