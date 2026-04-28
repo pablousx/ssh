@@ -19,15 +19,15 @@ prompt_option() {
     local user_input
 
     while true; do
-        read -p "$prompt_text (enable [e], disable [d], skip [s]) [$default_val]: " user_input
+        read -p "$prompt_text (yes [y], no [n], skip [s]) [$default_val]: " user_input
         user_input=$(echo "$user_input" | tr '[:upper:]' '[:lower:]')
         [ -z "$user_input" ] && user_input="$default_val"
 
         case "$user_input" in
-            e|enable) echo "enable"; return 0 ;;
-            d|disable) echo "disable"; return 0 ;;
+            y|yes) echo "yes"; return 0 ;;
+            n|no) echo "no"; return 0 ;;
             s|skip) echo "skip"; return 0 ;;
-            *) echo "Invalid option. Please use 'e', 'd', or 's'." >&2 ;;
+            *) echo "Invalid option. Please use 'y', 'n', or 's'." >&2 ;;
         esac
     done
 }
@@ -43,7 +43,7 @@ KEEP_ALIVE=$(prompt_option "2. SSH KeepAlive" "skip")
 
 WSL_BRIDGE="skip"
 if [ "$IS_WSL" = true ]; then
-    WSL_BRIDGE=$(prompt_option "3. WSL SSH Agent Bridge" "enable")
+    WSL_BRIDGE=$(prompt_option "3. WSL SSH Agent Bridge" "yes")
 fi
 
 echo
@@ -83,8 +83,8 @@ if [ "$IS_WSL" = true ]; then
 
     cat <<EOF >> "$CONFIG_FILE"
 # WSL-specific: Bridge Bitwarden SSH agent to native Linux ssh
-WSL_BRIDGE_PREF=\$(git config sync-ssh.wsl-bridge)
-if [ "\$WSL_BRIDGE_PREF" = "enable" ] || [ -z "\$WSL_BRIDGE_PREF" ] || [ "\$WSL_BRIDGE_PREF" = "skip" ]; then
+WSL_BRIDGE_PREF=$(git config sync-ssh.wsl-bridge)
+if [ "$WSL_BRIDGE_PREF" = "yes" ] || [ -z "$WSL_BRIDGE_PREF" ] || [ "$WSL_BRIDGE_PREF" = "skip" ]; then
     export SSH_AUTH_SOCK="\$HOME/.ssh/bitwarden-agent.sock"
 
     ssh-add -l &>/dev/null

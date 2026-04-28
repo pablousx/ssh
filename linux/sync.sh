@@ -127,14 +127,14 @@ sync_ssh() {
 
     # Process git-sign key based on preference
     COMMIT_SIGN_PREF=$(git config sync-ssh.commit-signing)
-    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="enable" # Default
+    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="yes" # Default
 
-    if [ "$COMMIT_SIGN_PREF" = "disable" ]; then
+    if [ "$COMMIT_SIGN_PREF" = "no" ]; then
         log_info "Git SSH commit signing is disabled via preference."
         git config --global commit.gpgsign false
     elif [ "$COMMIT_SIGN_PREF" = "skip" ]; then
         log_info "Skipping Git SSH commit signing configuration."
-    elif [ "$COMMIT_SIGN_PREF" = "enable" ]; then
+    elif [ "$COMMIT_SIGN_PREF" = "yes" ]; then
         GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
         if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
             GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
@@ -255,9 +255,9 @@ sync_ssh() {
 
     # Apply SSH KeepAlive preference
     KEEP_ALIVE_PREF=$(git config sync-ssh.keep-alive)
-    if [ "$KEEP_ALIVE_PREF" = "enable" ]; then
+    if [ "$KEEP_ALIVE_PREF" = "yes" ]; then
         NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 60\n  ServerAliveCountMax 3\n"
-    elif [ "$KEEP_ALIVE_PREF" = "disable" ]; then
+    elif [ "$KEEP_ALIVE_PREF" = "no" ]; then
         NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 0\n"
     fi
 

@@ -201,20 +201,12 @@ function Get-SshConfigEntry {
 
     $pubkeyFile = Join-Path $KeysDir "$safeName.pub"
 
-    # Save public key if content changed
+    # Save public key (overwrite securely by deleting existing one first)
     $newPubContent = "$KeyData $Type $Comment"
-    $shouldWrite = $true
     if (Test-Path $pubkeyFile) {
-        Set-ItemProperty -Path $pubkeyFile -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-        $currentPubContent = Get-Content -Path $pubkeyFile -Raw -ErrorAction SilentlyContinue
-        if ($currentPubContent -and $currentPubContent.Trim() -eq $newPubContent.Trim()) {
-            $shouldWrite = $false
-        }
+        Remove-Item -Path $pubkeyFile -Force -ErrorAction SilentlyContinue
     }
-
-    if ($shouldWrite) {
-        $newPubContent | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
-    }
+    $newPubContent | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
 
     # Build config entry
     $entry = "`nHost $safeName`n"
@@ -251,14 +243,14 @@ function Sync-SSH {
 
         # Process git-sign key based on preference
         $commitSignPref = git config sync-ssh.commit-signing
-        if ([string]::IsNullOrEmpty($commitSignPref)) { $commitSignPref = "enable" }
+        if ([string]::IsNullOrEmpty($commitSignPref)) { $commitSignPref = "yes" }
 
-        if ($commitSignPref -eq "disable") {
+        if ($commitSignPref -eq "no") {
             Write-Host "Git SSH commit signing is disabled via preference." -ForegroundColor Yellow
             git config --global commit.gpgsign false
         } elseif ($commitSignPref -eq "skip") {
             Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
-        } elseif ($commitSignPref -eq "enable") {
+        } elseif ($commitSignPref -eq "yes") {
             $gitSignMatch = $null
             foreach ($k in $bwLookup.Keys) {
                 if ($k.ToString().Trim().ToLower() -eq "git-sign") {
@@ -271,18 +263,10 @@ function Sync-SSH {
                 if ($gitSignMatch.publicKey) {
                 $signPub = Join-Path $config.KeysDir "git-sign.pub"
                 $newSignPubContent = $gitSignMatch.publicKey.Trim()
-                $shouldWriteSign = $true
                 if (Test-Path $signPub) {
-                    Set-ItemProperty -Path $signPub -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
-                    $currentSignPub = Get-Content -Path $signPub -Raw -ErrorAction SilentlyContinue
-                    if ($currentSignPub -and $currentSignPub.Trim() -eq $newSignPubContent) {
-                        $shouldWriteSign = $false
-                    }
+                    Remove-Item -Path $signPub -Force -ErrorAction SilentlyContinue
                 }
-
-                if ($shouldWriteSign) {
-                    $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
-                }
+                $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
 
                 Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
 
@@ -356,9 +340,9 @@ function Sync-SSH {
 
         # Apply SSH KeepAlive preference
         $keepAlivePref = git config sync-ssh.keep-alive
-        if ($keepAlivePref -eq "enable") {
+        if ($keepAlivePref -eq "yes") {
             $newManagedContent += "`nHost *`n  ServerAliveInterval 60`n  ServerAliveCountMax 3`n"
-        } elseif ($keepAlivePref -eq "disable") {
+        } elseif ($keepAlivePref -eq "no") {
             $newManagedContent += "`nHost *`n  ServerAliveInterval 0`n"
         }
 

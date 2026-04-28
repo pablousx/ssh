@@ -45,18 +45,18 @@ function Prompt-Option {
     )
 
     while ($true) {
-        $input = Read-Host "$PromptText (enable [e], disable [d], skip [s]) [default: $DefaultVal]"
+        $input = Read-Host "$PromptText (yes [y], no [n], skip [s]) [default: $DefaultVal]"
         $input = $input.ToLower().Trim()
         if ([string]::IsNullOrWhiteSpace($input)) { $input = $DefaultVal }
 
         switch ($input) {
-            "e" { return "enable" }
-            "enable" { return "enable" }
-            "d" { return "disable" }
-            "disable" { return "disable" }
+            "y" { return "yes" }
+            "yes" { return "yes" }
+            "n" { return "no" }
+            "no" { return "no" }
             "s" { return "skip" }
             "skip" { return "skip" }
-            default { Write-Host "Invalid option. Please use 'e', 'd', or 's'." -ForegroundColor Red }
+            default { Write-Host "Invalid option. Please use 'y', 'n', or 's'." -ForegroundColor Red }
         }
     }
 }
