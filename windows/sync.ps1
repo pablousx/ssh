@@ -345,9 +345,7 @@ function Sync-SSH {
 
                 if ($parts.Count -ge 3) {
                     if ($parts[2] -eq "git-sign") { continue }
-                    $entry = Get-SshConfigEntry -KeyData $parts[0] -Type $parts[1] -Comment $parts[2] `
-
-                        -BwLookup $bwLookup -KeysDir $config.KeysDir
+                    $entry = Get-SshConfigEntry -KeyData $parts[0] -Type $parts[1] -Comment $parts[2] -BwLookup $bwLookup -KeysDir $config.KeysDir
                     if ($entry) {
                         $newManagedContent += $entry
                         $processedCount++
