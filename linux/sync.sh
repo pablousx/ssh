@@ -135,7 +135,7 @@ sync_ssh() {
     elif [ "$COMMIT_SIGN_PREF" = "skip" ]; then
         log_info "Skipping Git SSH commit signing configuration."
     elif [ "$COMMIT_SIGN_PREF" = "enable" ]; then
-        GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name == "git-sign")' | head -n 1)
+        GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
         if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
             GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
             GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
@@ -176,7 +176,13 @@ sync_ssh() {
                 else
                     log_warn "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update."
                 fi
+            else
+                log_warn "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty."
             fi
+        else
+            log_warn "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found."
+            AVAILABLE_NAMES=$(echo "$BW_DATA" | jq -r '.[] | .name' | paste -sd, -)
+            log_info "Available item names in Bitwarden: $AVAILABLE_NAMES"
         fi
     fi
 

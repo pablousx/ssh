@@ -259,8 +259,16 @@ function Sync-SSH {
         } elseif ($commitSignPref -eq "skip") {
             Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
         } elseif ($commitSignPref -eq "enable") {
-            $gitSignMatch = $bwLookup["git-sign"]
-            if ($gitSignMatch -and $gitSignMatch.publicKey) {
+            $gitSignMatch = $null
+            foreach ($k in $bwLookup.Keys) {
+                if ($k.ToString().Trim().ToLower() -eq "git-sign") {
+                    $gitSignMatch = $bwLookup[$k]
+                    break
+                }
+            }
+
+            if ($gitSignMatch) {
+                if ($gitSignMatch.publicKey) {
                 $signPub = Join-Path $config.KeysDir "git-sign.pub"
                 $newSignPubContent = $gitSignMatch.publicKey.Trim()
                 $shouldWriteSign = $true
@@ -313,6 +321,12 @@ function Sync-SSH {
                 } else {
                     Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
                 }
+                } else {
+                    Write-Host "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty." -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found." -ForegroundColor Yellow
+                Write-Host "Available item names in Bitwarden: $($bwLookup.Keys -join ', ')" -ForegroundColor Gray
             }
         }
 
