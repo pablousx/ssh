@@ -29,6 +29,12 @@ function Initialize-SshConfig {
     icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
     icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
 
+    # Take ownership and reset individual key permissions to inherit from strict folder permissions
+    if (Test-Path "$KeysDir\*.pub") {
+        takeown /f "$KeysDir\*.pub" | Out-Null
+        icacls "$KeysDir\*.pub" /reset | Out-Null
+    }
+
     # Ensure the config file exists
     if (-not (Test-Path $SshConfig)) {
         New-Item -ItemType File -Path $SshConfig -Force | Out-Null
@@ -208,11 +214,7 @@ function Get-SshConfigEntry {
     }
 
     if ($shouldWrite) {
-        if (Test-Path $pubkeyFile) {
-            icacls "$pubkeyFile" /grant "$($env:USERNAME):F" | Out-Null
-        }
         $newPubContent | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
-        icacls "$pubkeyFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "$($env:USERNAME):F" | Out-Null
     }
 
     # Build config entry
@@ -271,11 +273,7 @@ function Sync-SSH {
                 }
 
                 if ($shouldWriteSign) {
-                    if (Test-Path $signPub) {
-                        icacls "$signPub" /grant "$($env:USERNAME):F" | Out-Null
-                    }
                     $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
-                    icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
                 }
 
                 Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
