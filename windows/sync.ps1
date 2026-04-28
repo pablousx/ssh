@@ -24,12 +24,18 @@ function Initialize-SshConfig {
         New-Item -ItemType Directory -Path $KeysDir -Force | Out-Null
     }
 
+    # Set strict permissions compatible with SSH
+    $currentUser = $env:USERNAME
+    icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+    icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+
     # Ensure the config file exists
     if (-not (Test-Path $SshConfig)) {
         New-Item -ItemType File -Path $SshConfig -Force | Out-Null
         $defaultConfig = "Host *`n  Port 22`n  AddKeysToAgent yes`n`n"
         $defaultConfig | Out-File -FilePath $SshConfig -Encoding utf8
     }
+    icacls "$SshConfig" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
 
     # Ensure managed markers exist
     $configContent = Get-Content -Path $SshConfig -Raw -ErrorAction SilentlyContinue
@@ -179,6 +185,7 @@ function Get-SshConfigEntry {
 
     # Save public key
     "$KeyData $Type $Comment" | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
+    icacls "$pubkeyFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "$($env:USERNAME):F" | Out-Null
 
     # Build config entry
     $entry = "`nHost $safeName`n"

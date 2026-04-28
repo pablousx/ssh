@@ -43,6 +43,8 @@ ensure_dependencies() {
 initialize_ssh_config() {
     mkdir -p "$HOME/.ssh"
     mkdir -p "$KEYS_DIR"
+    chmod 700 "$HOME/.ssh"
+    chmod 700 "$KEYS_DIR"
 
     if [ ! -f "$SSH_CONFIG_FILE" ]; then
         log_info "Creating default config at $SSH_CONFIG_FILE"
@@ -161,6 +163,7 @@ sync_ssh() {
 
         PUBKEY_FILE="$KEYS_DIR/$SAFE_NAME.pub"
         echo "$KEY_LINE" > "$PUBKEY_FILE"
+        chmod 644 "$PUBKEY_FILE"
 
         # Build config entry
         ENTRY="\nHost $SAFE_NAME\n"

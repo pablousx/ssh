@@ -13,8 +13,10 @@ SYNC_PS1="$REPO_ROOT/windows/sync.ps1"
 CONFIG_FILE="$HOME/.ssh/sync-ssh-env.sh"
 
 mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
 
 echo "# Managed by Sync-SSH (ssh repo)" > "$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE"
 
 if [ "$IS_WSL" = true ]; then
     echo "Configuring WSL for Windows SSH Agent..."
@@ -23,10 +25,11 @@ if [ "$IS_WSL" = true ]; then
 # WSL-specific: Bridge Bitwarden SSH agent to native Linux ssh
 export SSH_AUTH_SOCK="\$HOME/.ssh/bitwarden-agent.sock"
 
-if [[ ! -S "\$SSH_AUTH_SOCK" ]]; then
+ssh-add -l &>/dev/null
+if [ \$? -eq 2 ] || [ ! -S "\$SSH_AUTH_SOCK" ]; then
     rm -f "\$SSH_AUTH_SOCK"
-    (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \
-        EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \
+    (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \\
+        EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
         &>/dev/null &)
 fi
 
