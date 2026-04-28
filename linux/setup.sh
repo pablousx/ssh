@@ -33,7 +33,13 @@ if [ \$? -eq 2 ] || [ ! -S "\$SSH_AUTH_SOCK" ]; then
         &>/dev/null &)
 fi
 
-alias sync-ssh='bash "$REPO_ROOT/linux/sync.sh"'
+sync-ssh() {
+    if [ -z "\$BW_SESSION" ]; then
+        echo "Unlocking Bitwarden Vault..."
+        export BW_SESSION=\$(bw unlock --raw)
+    fi
+    bash "$SYNC_SH"
+}
 
 # Optional GPG configuration (for commit signing)
 # Uncomment and adjust as needed if you want to sign commits:
@@ -50,7 +56,13 @@ else
 
     cat <<EOF >> "$CONFIG_FILE"
 # Linux-specific: Use native SSH Agent
-alias sync-ssh='bash "$SYNC_SH"'
+sync-ssh() {
+    if [ -z "\$BW_SESSION" ]; then
+        echo "Unlocking Bitwarden Vault..."
+        export BW_SESSION=\$(bw unlock --raw)
+    fi
+    bash "$SYNC_SH"
+}
 
 # Optional GPG configuration (for commit signing)
 # Uncomment if you want to sign commits:

@@ -154,6 +154,24 @@ See the [Prerequisites](#️-prerequisites) section above.
 
 ---
 
+## 🔏 Git SSH Signing
+
+You can use your Bitwarden-managed SSH keys to cryptographically sign your Git commits.
+
+### Setup
+1. Name your Bitwarden SSH Key item exactly `git-sign`.
+2. **Optional**: Add a Custom Field named `Email` (or `GitEmail`) in Bitwarden if you want to use a specific email address for commit verification.
+3. Run the sync script (`sync-ssh` on Linux/WSL or `Sync-SSH` on Windows).
+
+The script will automatically:
+- Fetch the public key directly from Bitwarden (no host metadata or SSH Agent matching required).
+- Configure Git globally to use SSH signing.
+- Set `user.signingkey` to the synced public key.
+- Update your `~/.ssh/allowed_signers` file with your Bitwarden `Email` field (or fall back to Git global user email).
+
+
+---
+
 ## ❓ FAQ & Troubleshooting
 
 **Q: `sync-ssh` says "No keys found in ssh-agent"**

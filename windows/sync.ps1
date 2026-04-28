@@ -79,7 +79,8 @@ function Unlock-BitwardenVault {
     $bwStatusJson = bw status | ConvertFrom-Json
     $bwStatus = $bwStatusJson.status
 
-    if ($bwStatus -ne 'unlocked') {
+    if (-not $env:BW_SESSION) {
+
         Write-Host "Bitwarden Vault: $bwStatus" -ForegroundColor Yellow
         Write-Host "Unlocking vault..."
 
@@ -118,15 +119,18 @@ function Get-BitwardenSshKeys {
     $items = bw list items | ConvertFrom-Json
     $sshItems = $items | Where-Object { $_.type -eq 5 }
 
-    # Create lookup dictionary: name -> (hostname, user)
+    # Create lookup dictionary: name -> (hostname, user, publicKey, email)
     $bwLookup = @{}
     foreach ($item in $sshItems) {
         $hostnameField = $item.fields | Where-Object { $_.name -eq "HostName" }
         $userField = $item.fields | Where-Object { $_.name -eq "User" }
+        $emailField = $item.fields | Where-Object { $_.name -eq "Email" -or $_.name -eq "GitEmail" }
 
         $bwLookup[$item.name] = @{
             hostname = if ($hostnameField) { $hostnameField.value } else { $null }
             user = if ($userField) { $userField.value } else { $null }
+            publicKey = if ($item.sshKey) { $item.sshKey.publicKey } else { $null }
+            email = if ($emailField) { $emailField.value } else { $null }
         }
     }
 
@@ -167,13 +171,23 @@ function Get-SshConfigEntry {
     # Match comment with Bitwarden entry
     $bwMatch = $BwLookup[$Comment]
 
-    if ($bwMatch -and $bwMatch.hostname) {
-        $hostname = $bwMatch.hostname
-        $user = $bwMatch.user
-    } else {
-        $hostname = $Comment
-        $user = $null
+    if (-not $bwMatch) {
+        Write-Host "Skipping key '$Comment': No matching item found in Bitwarden." -ForegroundColor Yellow
+        return $null
     }
+
+    $missingAttrs = @()
+    if (-not $bwMatch.hostname) { $missingAttrs += "HostName" }
+    if (-not $bwMatch.user) { $missingAttrs += "User" }
+
+    if ($missingAttrs.Count -gt 0) {
+        Write-Host "Skipping key '$Comment': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
+        return $null
+    }
+
+    $hostname = $bwMatch.hostname
+    $user = $bwMatch.user
+
 
     # Sanitize Host alias (safeName)
     $safeName = $Comment -replace '[^a-zA-Z0-9._-]', '-'
@@ -220,6 +234,55 @@ function Sync-SSH {
         # Get Bitwarden SSH key metadata
         $bwLookup = Get-BitwardenSshKeys
 
+        # Process git-sign key directly from Bitwarden (independent of SSH Agent loop)
+        $gitSignMatch = $bwLookup["git-sign"]
+        if ($gitSignMatch -and $gitSignMatch.publicKey) {
+            $signPub = Join-Path $config.KeysDir "git-sign.pub"
+            $gitSignMatch.publicKey | Out-File -FilePath $signPub -Encoding utf8 -Force
+
+            # Set strict permissions
+            $currentUser = $env:USERNAME
+            icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+
+            Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
+
+            Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
+            git config --global gpg.format ssh
+            git config --global user.signingkey "$signPub"
+            git config --global commit.gpgsign true
+            git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
+
+            # Determine email for allowed_signers
+            $signingEmail = $gitSignMatch.email
+            if (-not $signingEmail) { $signingEmail = git config user.email }
+
+            if ($signingEmail) {
+                $pubContent = $gitSignMatch.publicKey.Trim()
+                $parts = $pubContent -split '\s+'
+                if ($parts.Count -ge 2) {
+                    $keyType = $parts[0]
+                    $keyBlob = $parts[1]
+                    $allowedFile = "$HOME\.ssh\allowed_signers"
+
+                    $newEntry = "$signingEmail $keyType $keyBlob"
+
+                    if (Test-Path $allowedFile) {
+                        $lines = Get-Content -Path $allowedFile
+                        $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
+                        $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                    } else {
+                        $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                    }
+
+                    icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+
+                    Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
+                }
+            } else {
+                Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
+            }
+        }
+
         # Get keys from ssh-agent
         $keys = Get-SshAgentKeys
 
@@ -234,10 +297,14 @@ function Sync-SSH {
                 $parts = $line -split '\s+', 3
 
                 if ($parts.Count -ge 3) {
+                    if ($parts[2] -eq "git-sign") { continue }
                     $entry = Get-SshConfigEntry -KeyData $parts[0] -Type $parts[1] -Comment $parts[2] `
+
                         -BwLookup $bwLookup -KeysDir $config.KeysDir
-                    $newManagedContent += $entry
-                    $processedCount++
+                    if ($entry) {
+                        $newManagedContent += $entry
+                        $processedCount++
+                    }
                 }
             }
         }
@@ -262,6 +329,7 @@ function Sync-SSH {
         }
 
         Write-Host "`n[OK] Done! Synced $processedCount SSH keys and updated managed section in config!" -ForegroundColor Green
+
     }
     catch {
         Write-Host "`n> Error: $_" -ForegroundColor Red

@@ -83,7 +83,8 @@ unlock_vault() {
         exit 1
     fi
 
-    if [ "$STATUS" != "unlocked" ]; then
+    if [ -z "$BW_SESSION" ]; then
+
         log_warn "Bitwarden Vault: $STATUS"
         log_info "Unlocking vault..."
         BW_SESSION=$(bw unlock --raw)
@@ -102,8 +103,8 @@ get_bitwarden_keys() {
     bw sync > /dev/null
 
     log_info "Fetching items from Bitwarden..."
-    # Type 5 is SSH Key. Return an array of objects for easier lookup.
-    bw list items | jq -c '[.[] | select(.type == 5) | {name: .name, hostname: (.fields[]? | select(.name == "HostName") | .value), user: (.fields[]? | select(.name == "User") | .value)}]'
+    # Type 5 is SSH Key. Return an array of objects.
+    bw list items | jq -c '[.[] | select(.type == 5)]'
 }
 
 sync_ssh() {
@@ -124,6 +125,51 @@ sync_ssh() {
     # Get Bitwarden data as a JSON array
     BW_DATA=$(get_bitwarden_keys)
 
+    # Process git-sign key directly from Bitwarden (independent of SSH Agent loop)
+    GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name == "git-sign")' | head -n 1)
+    if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
+        GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
+        GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
+
+        if [ -n "$GIT_SIGN_PUB" ] && [ "$GIT_SIGN_PUB" != "null" ]; then
+            SIGN_PUB="$KEYS_DIR/git-sign.pub"
+            echo "$GIT_SIGN_PUB" > "$SIGN_PUB"
+            chmod 644 "$SIGN_PUB"
+            log_success "Synced Git signing key from Bitwarden: git-sign"
+
+            log_info "Configuring Git SSH signing with key: git-sign"
+            git config --global gpg.format ssh
+            git config --global user.signingkey "$SIGN_PUB"
+            git config --global commit.gpgsign true
+            git config --global gpg.ssh.allowedSignersFile "$HOME/.ssh/allowed_signers"
+
+            # Determine email for allowed_signers
+            SIGNING_EMAIL="$GIT_SIGN_EMAIL"
+            [ -z "$SIGNING_EMAIL" ] && SIGNING_EMAIL=$(git config user.email)
+
+            if [ -n "$SIGNING_EMAIL" ]; then
+                KEY_CONTENT=$(echo "$GIT_SIGN_PUB" | awk '{print $1, $2}')
+                ALLOWED_FILE="$HOME/.ssh/allowed_signers"
+
+                touch "$ALLOWED_FILE"
+                chmod 600 "$ALLOWED_FILE"
+
+                # Remove old entry for this email if exists
+                if [ -s "$ALLOWED_FILE" ]; then
+                    grep -vF "$SIGNING_EMAIL" "$ALLOWED_FILE" > "${ALLOWED_FILE}.tmp" || true
+                else
+                    > "${ALLOWED_FILE}.tmp"
+                fi
+
+                echo "$SIGNING_EMAIL $KEY_CONTENT" >> "${ALLOWED_FILE}.tmp"
+                mv "${ALLOWED_FILE}.tmp" "$ALLOWED_FILE"
+                log_success "Updated $ALLOWED_FILE for $SIGNING_EMAIL"
+            else
+                log_warn "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update."
+            fi
+        fi
+    fi
+
     NEW_MANAGED_CONTENT=""
     PROCESSED_COUNT=0
 
@@ -136,6 +182,10 @@ sync_ssh() {
         # awk handles the first two, cut gets the rest (comment may have spaces)
         TYPE=$(echo "$KEY_LINE" | awk '{print $1}')
         COMMENT=$(echo "$KEY_LINE" | cut -d' ' -f3-)
+        
+        # Skip git-sign key as it is processed separately
+        [ "$COMMENT" = "git-sign" ] && continue
+
 
         # Reset variables for this key
         HOSTNAME=""
@@ -145,15 +195,24 @@ sync_ssh() {
         # Find match in BW data array
         MATCH=$(echo "$BW_DATA" | jq -c --arg comment "$COMMENT" '.[] | select(.name == $comment)' | head -n 1)
 
-        if [ -n "$MATCH" ]; then
-            HOSTNAME=$(echo "$MATCH" | jq -r '.hostname // empty')
-            USER=$(echo "$MATCH" | jq -r '.user // empty')
+        if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
+            HOSTNAME=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
+            USER=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
+            
+            MISSING_ATTRS=()
+            [ -z "$HOSTNAME" ] && MISSING_ATTRS+=("HostName")
+            [ -z "$USER" ] && MISSING_ATTRS+=("User")
+            
+            if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
+                ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
+                log_warn "Skipping key '$COMMENT': Missing custom field(s) in Bitwarden: $ATTRS_STR"
+                continue
+            fi
+        else
+            log_warn "Skipping key '$COMMENT': No matching item found in Bitwarden."
+            continue
         fi
 
-        # Fallback if no Bitwarden metadata
-        if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "null" ]; then
-            HOSTNAME="$COMMENT"
-        fi
 
         # Sanitize Host alias (safeName)
         SAFE_NAME=$(echo "$COMMENT" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
