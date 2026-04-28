@@ -234,52 +234,62 @@ function Sync-SSH {
         # Get Bitwarden SSH key metadata
         $bwLookup = Get-BitwardenSshKeys
 
-        # Process git-sign key directly from Bitwarden (independent of SSH Agent loop)
-        $gitSignMatch = $bwLookup["git-sign"]
-        if ($gitSignMatch -and $gitSignMatch.publicKey) {
-            $signPub = Join-Path $config.KeysDir "git-sign.pub"
-            $gitSignMatch.publicKey | Out-File -FilePath $signPub -Encoding utf8 -Force
+        # Process git-sign key based on preference
+        $commitSignPref = git config sync-ssh.commit-signing
+        if ([string]::IsNullOrEmpty($commitSignPref)) { $commitSignPref = "enable" }
 
-            # Set strict permissions
-            $currentUser = $env:USERNAME
-            icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+        if ($commitSignPref -eq "disable") {
+            Write-Host "Git SSH commit signing is disabled via preference." -ForegroundColor Yellow
+            git config --global commit.gpgsign false
+        } elseif ($commitSignPref -eq "skip") {
+            Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
+        } elseif ($commitSignPref -eq "enable") {
+            $gitSignMatch = $bwLookup["git-sign"]
+            if ($gitSignMatch -and $gitSignMatch.publicKey) {
+                $signPub = Join-Path $config.KeysDir "git-sign.pub"
+                $gitSignMatch.publicKey | Out-File -FilePath $signPub -Encoding utf8 -Force
 
-            Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
+                # Set strict permissions
+                $currentUser = $env:USERNAME
+                icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
 
-            Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
-            git config --global gpg.format ssh
-            git config --global user.signingkey "$signPub"
-            git config --global commit.gpgsign true
-            git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
+                Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
 
-            # Determine email for allowed_signers
-            $signingEmail = $gitSignMatch.email
-            if (-not $signingEmail) { $signingEmail = git config user.email }
+                Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
+                git config --global gpg.format ssh
+                git config --global user.signingkey "$signPub"
+                git config --global commit.gpgsign true
+                git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
 
-            if ($signingEmail) {
-                $pubContent = $gitSignMatch.publicKey.Trim()
-                $parts = $pubContent -split '\s+'
-                if ($parts.Count -ge 2) {
-                    $keyType = $parts[0]
-                    $keyBlob = $parts[1]
-                    $allowedFile = "$HOME\.ssh\allowed_signers"
+                # Determine email for allowed_signers
+                $signingEmail = $gitSignMatch.email
+                if (-not $signingEmail) { $signingEmail = git config user.email }
 
-                    $newEntry = "$signingEmail $keyType $keyBlob"
+                if ($signingEmail) {
+                    $pubContent = $gitSignMatch.publicKey.Trim()
+                    $parts = $pubContent -split '\s+'
+                    if ($parts.Count -ge 2) {
+                        $keyType = $parts[0]
+                        $keyBlob = $parts[1]
+                        $allowedFile = "$HOME\.ssh\allowed_signers"
 
-                    if (Test-Path $allowedFile) {
-                        $lines = Get-Content -Path $allowedFile
-                        $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
-                        $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
-                    } else {
-                        $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                        $newEntry = "$signingEmail $keyType $keyBlob"
+
+                        if (Test-Path $allowedFile) {
+                            $lines = Get-Content -Path $allowedFile
+                            $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
+                            $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                        } else {
+                            $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                        }
+
+                        icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+
+                        Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
                     }
-
-                    icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
-
-                    Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
+                } else {
+                    Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
                 }
-            } else {
-                Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
             }
         }
 
@@ -307,6 +317,14 @@ function Sync-SSH {
                     }
                 }
             }
+        }
+
+        # Apply SSH KeepAlive preference
+        $keepAlivePref = git config sync-ssh.keep-alive
+        if ($keepAlivePref -eq "enable") {
+            $newManagedContent += "`nHost *`n  ServerAliveInterval 60`n  ServerAliveCountMax 3`n"
+        } elseif ($keepAlivePref -eq "disable") {
+            $newManagedContent += "`nHost *`n  ServerAliveInterval 0`n"
         }
 
         # Update the config file using managed block

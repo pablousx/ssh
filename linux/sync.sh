@@ -125,47 +125,57 @@ sync_ssh() {
     # Get Bitwarden data as a JSON array
     BW_DATA=$(get_bitwarden_keys)
 
-    # Process git-sign key directly from Bitwarden (independent of SSH Agent loop)
-    GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name == "git-sign")' | head -n 1)
-    if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
-        GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
-        GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
+    # Process git-sign key based on preference
+    COMMIT_SIGN_PREF=$(git config sync-ssh.commit-signing)
+    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="enable" # Default
 
-        if [ -n "$GIT_SIGN_PUB" ] && [ "$GIT_SIGN_PUB" != "null" ]; then
-            SIGN_PUB="$KEYS_DIR/git-sign.pub"
-            echo "$GIT_SIGN_PUB" > "$SIGN_PUB"
-            chmod 644 "$SIGN_PUB"
-            log_success "Synced Git signing key from Bitwarden: git-sign"
+    if [ "$COMMIT_SIGN_PREF" = "disable" ]; then
+        log_info "Git SSH commit signing is disabled via preference."
+        git config --global commit.gpgsign false
+    elif [ "$COMMIT_SIGN_PREF" = "skip" ]; then
+        log_info "Skipping Git SSH commit signing configuration."
+    elif [ "$COMMIT_SIGN_PREF" = "enable" ]; then
+        GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name == "git-sign")' | head -n 1)
+        if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
+            GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
+            GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
 
-            log_info "Configuring Git SSH signing with key: git-sign"
-            git config --global gpg.format ssh
-            git config --global user.signingkey "$SIGN_PUB"
-            git config --global commit.gpgsign true
-            git config --global gpg.ssh.allowedSignersFile "$HOME/.ssh/allowed_signers"
+            if [ -n "$GIT_SIGN_PUB" ] && [ "$GIT_SIGN_PUB" != "null" ]; then
+                SIGN_PUB="$KEYS_DIR/git-sign.pub"
+                echo "$GIT_SIGN_PUB" > "$SIGN_PUB"
+                chmod 644 "$SIGN_PUB"
+                log_success "Synced Git signing key from Bitwarden: git-sign"
 
-            # Determine email for allowed_signers
-            SIGNING_EMAIL="$GIT_SIGN_EMAIL"
-            [ -z "$SIGNING_EMAIL" ] && SIGNING_EMAIL=$(git config user.email)
+                log_info "Configuring Git SSH signing with key: git-sign"
+                git config --global gpg.format ssh
+                git config --global user.signingkey "$SIGN_PUB"
+                git config --global commit.gpgsign true
+                git config --global gpg.ssh.allowedSignersFile "$HOME/.ssh/allowed_signers"
 
-            if [ -n "$SIGNING_EMAIL" ]; then
-                KEY_CONTENT=$(echo "$GIT_SIGN_PUB" | awk '{print $1, $2}')
-                ALLOWED_FILE="$HOME/.ssh/allowed_signers"
+                # Determine email for allowed_signers
+                SIGNING_EMAIL="$GIT_SIGN_EMAIL"
+                [ -z "$SIGNING_EMAIL" ] && SIGNING_EMAIL=$(git config user.email)
 
-                touch "$ALLOWED_FILE"
-                chmod 600 "$ALLOWED_FILE"
+                if [ -n "$SIGNING_EMAIL" ]; then
+                    KEY_CONTENT=$(echo "$GIT_SIGN_PUB" | awk '{print $1, $2}')
+                    ALLOWED_FILE="$HOME/.ssh/allowed_signers"
 
-                # Remove old entry for this email if exists
-                if [ -s "$ALLOWED_FILE" ]; then
-                    grep -vF "$SIGNING_EMAIL" "$ALLOWED_FILE" > "${ALLOWED_FILE}.tmp" || true
+                    touch "$ALLOWED_FILE"
+                    chmod 600 "$ALLOWED_FILE"
+
+                    # Remove old entry for this email if exists
+                    if [ -s "$ALLOWED_FILE" ]; then
+                        grep -vF "$SIGNING_EMAIL" "$ALLOWED_FILE" > "${ALLOWED_FILE}.tmp" || true
+                    else
+                        > "${ALLOWED_FILE}.tmp"
+                    fi
+
+                    echo "$SIGNING_EMAIL $KEY_CONTENT" >> "${ALLOWED_FILE}.tmp"
+                    mv "${ALLOWED_FILE}.tmp" "$ALLOWED_FILE"
+                    log_success "Updated $ALLOWED_FILE for $SIGNING_EMAIL"
                 else
-                    > "${ALLOWED_FILE}.tmp"
+                    log_warn "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update."
                 fi
-
-                echo "$SIGNING_EMAIL $KEY_CONTENT" >> "${ALLOWED_FILE}.tmp"
-                mv "${ALLOWED_FILE}.tmp" "$ALLOWED_FILE"
-                log_success "Updated $ALLOWED_FILE for $SIGNING_EMAIL"
-            else
-                log_warn "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update."
             fi
         fi
     fi
@@ -182,7 +192,7 @@ sync_ssh() {
         # awk handles the first two, cut gets the rest (comment may have spaces)
         TYPE=$(echo "$KEY_LINE" | awk '{print $1}')
         COMMENT=$(echo "$KEY_LINE" | cut -d' ' -f3-)
-        
+
         # Skip git-sign key as it is processed separately
         [ "$COMMENT" = "git-sign" ] && continue
 
@@ -198,11 +208,11 @@ sync_ssh() {
         if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
             HOSTNAME=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
             USER=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
-            
+
             MISSING_ATTRS=()
             [ -z "$HOSTNAME" ] && MISSING_ATTRS+=("HostName")
             [ -z "$USER" ] && MISSING_ATTRS+=("User")
-            
+
             if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
                 ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
                 log_warn "Skipping key '$COMMENT': Missing custom field(s) in Bitwarden: $ATTRS_STR"
@@ -236,6 +246,14 @@ sync_ssh() {
         NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
     done <<< "$AGENT_KEYS"
+
+    # Apply SSH KeepAlive preference
+    KEEP_ALIVE_PREF=$(git config sync-ssh.keep-alive)
+    if [ "$KEEP_ALIVE_PREF" = "enable" ]; then
+        NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 60\n  ServerAliveCountMax 3\n"
+    elif [ "$KEEP_ALIVE_PREF" = "disable" ]; then
+        NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 0\n"
+    fi
 
     # Update config file using awk for reliable block replacement
     TEMP_CONFIG=$(mktemp)
