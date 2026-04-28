@@ -102,5 +102,5 @@ $runSync = Read-Host "`nDo you want to sync SSH keys right away? (y/n) [default:
 $runSync = $runSync.ToLower().Trim()
 if ($runSync -eq "y" -or $runSync -eq "yes") {
     Write-Host "Running sync..." -ForegroundColor Cyan
-    Sync-SSH
+    & "$PSScriptRoot\sync.ps1"
 }
