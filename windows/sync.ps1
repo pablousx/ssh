@@ -25,7 +25,7 @@ function Initialize-SshConfig {
     }
 
     # Set strict permissions compatible with SSH
-    $currentUser = $env:USERNAME
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
     icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
 
