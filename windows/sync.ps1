@@ -197,9 +197,23 @@ function Get-SshConfigEntry {
 
     $pubkeyFile = Join-Path $KeysDir "$safeName.pub"
 
-    # Save public key
-    "$KeyData $Type $Comment" | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
-    icacls "$pubkeyFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "$($env:USERNAME):F" | Out-Null
+    # Save public key if content changed
+    $newPubContent = "$KeyData $Type $Comment"
+    $shouldWrite = $true
+    if (Test-Path $pubkeyFile) {
+        $currentPubContent = Get-Content -Path $pubkeyFile -Raw -ErrorAction SilentlyContinue
+        if ($currentPubContent -and $currentPubContent.Trim() -eq $newPubContent.Trim()) {
+            $shouldWrite = $false
+        }
+    }
+
+    if ($shouldWrite) {
+        if (Test-Path $pubkeyFile) {
+            icacls "$pubkeyFile" /grant "$($env:USERNAME):F" | Out-Null
+        }
+        $newPubContent | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
+        icacls "$pubkeyFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "$($env:USERNAME):F" | Out-Null
+    }
 
     # Build config entry
     $entry = "`nHost $safeName`n"
@@ -247,11 +261,22 @@ function Sync-SSH {
             $gitSignMatch = $bwLookup["git-sign"]
             if ($gitSignMatch -and $gitSignMatch.publicKey) {
                 $signPub = Join-Path $config.KeysDir "git-sign.pub"
-                $gitSignMatch.publicKey | Out-File -FilePath $signPub -Encoding utf8 -Force
+                $newSignPubContent = $gitSignMatch.publicKey.Trim()
+                $shouldWriteSign = $true
+                if (Test-Path $signPub) {
+                    $currentSignPub = Get-Content -Path $signPub -Raw -ErrorAction SilentlyContinue
+                    if ($currentSignPub -and $currentSignPub.Trim() -eq $newSignPubContent) {
+                        $shouldWriteSign = $false
+                    }
+                }
 
-                # Set strict permissions
-                $currentUser = $env:USERNAME
-                icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+                if ($shouldWriteSign) {
+                    if (Test-Path $signPub) {
+                        icacls "$signPub" /grant "$($env:USERNAME):F" | Out-Null
+                    }
+                    $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
+                    icacls "$signPub" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+                }
 
                 Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
 
