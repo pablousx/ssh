@@ -26,8 +26,8 @@ function Initialize-SshConfig {
 
     # Set strict permissions compatible with SSH
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
-    icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+    icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "${currentUser}:(OI)(CI)F" | Out-Null
+    icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "${currentUser}:(OI)(CI)F" | Out-Null
 
     # Unconditionally take ownership and reset all file permissions in the keys directory recursively
     takeown /f "$KeysDir" /r /d y 2>$null | Out-Null
