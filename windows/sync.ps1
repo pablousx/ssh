@@ -131,21 +131,34 @@ function Get-BitwardenSshKeys {
 
     try {
         $items = $itemsRaw | ConvertFrom-Json
+        $itemCount = @($items).Count
+        Write-Host "  - Successfully parsed $itemCount total items from JSON." -ForegroundColor Gray
     } catch {
         Write-Host "Error parsing Bitwarden JSON. Try running 'bw sync' manually." -ForegroundColor Red
         return @{}
     }
 
     $sshItems = @($items) | Where-Object { $_.type -eq 5 }
+    Write-Host "  - Found $(@($sshItems).Count) items with type 5 (SSH Key)." -ForegroundColor Gray
 
     # Create lookup dictionary: ID -> (name, hostname, user, publicKey, email)
     $bwLookup = @{}
     foreach ($item in $sshItems) {
-        # Robust field lookup: find the first field that matches the name (case-insensitive)
+        $itemName = $item.name
+        Write-Host "    -> Inspecting key item: '$itemName'" -ForegroundColor DarkGray
+        
+        # Robust field lookup
         $fields = @($item.fields)
+        if ($fields.Count -gt 0) {
+            Write-Host "       (Item has $($fields.Count) custom fields)" -ForegroundColor DarkGray
+        }
+
         $hostnameField = $fields | Where-Object { $_.name -match "^HostName$" } | Select-Object -First 1
         $userField     = $fields | Where-Object { $_.name -match "^User$" } | Select-Object -First 1
         $emailField    = $fields | Where-Object { $_.name -match "^(Email|GitEmail)$" } | Select-Object -First 1
+
+        if ($hostnameField) { Write-Host "       [FOUND] HostName field" -ForegroundColor DarkGreen }
+        if ($userField) { Write-Host "       [FOUND] User field" -ForegroundColor DarkGreen }
 
         $bwLookup[$item.id] = @{
             name           = $item.name
@@ -157,7 +170,7 @@ function Get-BitwardenSshKeys {
         }
     }
 
-    Write-Host "Found $($bwLookup.Count) SSH keys in Bitwarden." -ForegroundColor Green
+    Write-Host "Found $($bwLookup.Count) SSH keys successfully mapped." -ForegroundColor Green
     return $bwLookup
 }
 
