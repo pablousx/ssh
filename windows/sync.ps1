@@ -131,34 +131,21 @@ function Get-BitwardenSshKeys {
 
     try {
         $items = $itemsRaw | ConvertFrom-Json
-        $itemCount = @($items).Count
-        Write-Host "  - Successfully parsed $itemCount total items from JSON." -ForegroundColor Gray
     } catch {
         Write-Host "Error parsing Bitwarden JSON. Try running 'bw sync' manually." -ForegroundColor Red
         return @{}
     }
 
     $sshItems = @($items) | Where-Object { $_.type -eq 5 }
-    Write-Host "  - Found $(@($sshItems).Count) items with type 5 (SSH Key)." -ForegroundColor Gray
 
     # Create lookup dictionary: ID -> (name, hostname, user, publicKey, email)
     $bwLookup = @{}
     foreach ($item in $sshItems) {
-        $itemName = $item.name
-        Write-Host "    -> Inspecting key item: '$itemName'" -ForegroundColor DarkGray
-        
         # Robust field lookup
         $fields = @($item.fields)
-        if ($fields.Count -gt 0) {
-            Write-Host "       (Item has $($fields.Count) custom fields)" -ForegroundColor DarkGray
-        }
-
         $hostnameField = $fields | Where-Object { $_.name -match "^HostName$" } | Select-Object -First 1
         $userField     = $fields | Where-Object { $_.name -match "^User$" } | Select-Object -First 1
         $emailField    = $fields | Where-Object { $_.name -match "^(Email|GitEmail)$" } | Select-Object -First 1
-
-        if ($hostnameField) { Write-Host "       [FOUND] HostName field" -ForegroundColor DarkGreen }
-        if ($userField) { Write-Host "       [FOUND] User field" -ForegroundColor DarkGreen }
 
         $bwLookup[$item.id] = @{
             name           = $item.name
@@ -170,7 +157,7 @@ function Get-BitwardenSshKeys {
         }
     }
 
-    Write-Host "Found $($bwLookup.Count) SSH keys successfully mapped." -ForegroundColor Green
+    Write-Host "Found $($bwLookup.Count) SSH keys in Bitwarden." -ForegroundColor Green
     return $bwLookup
 }
 
@@ -284,15 +271,10 @@ function Sync-SSH {
             $itemName = $item.name
             
             # Skip git-sign key as it is processed separately
-            if ($itemName.ToLower().Trim() -eq "git-sign") { 
-                Write-Host "  - Skipping '$itemName' (handled by Git Signing logic)" -ForegroundColor Gray
-                continue 
-            }
+            if ($itemName.ToLower().Trim() -eq "git-sign") { continue }
             
-            Write-Host "  - Checking item: '$itemName' (ID: $id)" -ForegroundColor Gray
-
             if (-not $item.publicKey) {
-                Write-Host "    [!] Skipping '$itemName': Public Key field is empty in Bitwarden API response." -ForegroundColor Yellow
+                Write-Host "Skipping key '$itemName': Public Key field is empty in Bitwarden." -ForegroundColor Yellow
                 continue
             }
 
@@ -301,8 +283,7 @@ function Sync-SSH {
             if ([string]::IsNullOrWhiteSpace($item.user)) { $missingAttrs += "User" }
 
             if ($missingAttrs.Count -gt 0) {
-                Write-Host "    [!] Skipping '$itemName': Missing custom field(s): $($missingAttrs -join ', ')" -ForegroundColor Yellow
-                Write-Host "        (Ensure these are 'Text' type custom fields in Bitwarden)" -ForegroundColor Gray
+                Write-Host "Skipping key '$itemName': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
                 continue
             }
 
@@ -311,16 +292,8 @@ function Sync-SSH {
 
             # Check for Organization-owned keys (Bitwarden Agent limitation)
             if ($item.organizationId -and $item.organizationId -ne "00000000-0000-0000-0000-000000000000") {
-                Write-Host "  ---" -ForegroundColor Yellow
-                Write-Host "  ⚠️  Notice: '$itemName' (ID: $id) is an Organization-owned key." -ForegroundColor Yellow
-                Write-Host "     Bitwarden Desktop's SSH Agent does NOT support organization keys." -ForegroundColor Yellow
-                Write-Host "     To use this key, either:" -ForegroundColor Gray
-                Write-Host "     1. Move it to your Personal Vault (Recommended)" -ForegroundColor Gray
-                Write-Host "     2. Run: bw get item $id | jq -r .sshKey.privateKey | ssh-add -" -ForegroundColor Gray
-                Write-Host "  ---" -ForegroundColor Yellow
+                Write-Host "Notice: '$itemName' is an Organization-owned key. If it fails to load, move it to your Personal Vault." -ForegroundColor Yellow
             }
-
-            Write-Host "    [+] Found valid metadata: HostName=$hostname, User=$user" -ForegroundColor DarkGray
 
             # Sanitize Host alias (safeName)
             $safeName = $itemName -replace '[^a-zA-Z0-9._-]', '-'
@@ -346,7 +319,6 @@ function Sync-SSH {
 
             $newManagedContent += $entry
             $processedCount++
-            Write-Host "    [OK] Added to config as 'Host $safeName'" -ForegroundColor Green
         }
 
 
