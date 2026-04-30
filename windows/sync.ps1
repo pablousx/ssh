@@ -142,88 +142,10 @@ function Get-BitwardenSshKeys {
     return $bwLookup
 }
 
-function Get-SshAgentKeys {
-    <#
-    .SYNOPSIS
-    Retrieve public keys from ssh-agent
-    #>
-
-    $keys = ssh-add -L 2>&1
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Error: Could not retrieve keys from SSH agent" -ForegroundColor Red
-        Write-Host "Make sure you have keys loaded with: ssh-add" -ForegroundColor Yellow
-        throw "SSH agent error"
-    }
-
-    return $keys
-}
-
-function Get-SshConfigEntry {
-    <#
-    .SYNOPSIS
-    Generate SSH config entry for a key
-    #>
-    param(
-        [string]$KeyData,
-        [string]$Type,
-        [string]$Comment,
-        [hashtable]$BwLookup,
-        [string]$KeysDir
-    )
-
-    # Match comment with Bitwarden entry
-    $bwMatch = $BwLookup[$Comment]
-
-    if (-not $bwMatch) {
-        Write-Host "Skipping key '$Comment': No matching item found in Bitwarden." -ForegroundColor Yellow
-        return $null
-    }
-
-    $missingAttrs = @()
-    if (-not $bwMatch.hostname) { $missingAttrs += "HostName" }
-    if (-not $bwMatch.user) { $missingAttrs += "User" }
-
-    if ($missingAttrs.Count -gt 0) {
-        Write-Host "Skipping key '$Comment': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
-        return $null
-    }
-
-    $hostname = $bwMatch.hostname
-    $user = $bwMatch.user
-
-
-    # Sanitize Host alias (safeName)
-    $safeName = $Comment -replace '[^a-zA-Z0-9._-]', '-'
-    $safeName = $safeName.ToLower().Trim('-')
-
-    if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = "ssh-key-" + (Get-Random) }
-
-    $pubkeyFile = Join-Path $KeysDir "$safeName.pub"
-
-    # Save public key (overwrite securely by deleting existing one first)
-    $newPubContent = "$KeyData $Type $Comment"
-    if (Test-Path $pubkeyFile) {
-        Remove-Item -Path $pubkeyFile -Force -ErrorAction SilentlyContinue
-    }
-    $newPubContent | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
-
-    # Build config entry
-    $entry = "`nHost $safeName`n"
-    $entry += "  HostName $hostname`n"
-    if ($user) {
-        $entry += "  User $user`n"
-    }
-    $entry += "  IdentityFile $pubkeyFile`n"
-    $entry += "  IdentitiesOnly yes`n"
-
-    return $entry
-}
-
 function Sync-SSH {
     <#
     .SYNOPSIS
-    Sync SSH keys from ssh-agent with Bitwarden metadata to create SSH config
+    Sync SSH keys from Bitwarden metadata to create SSH config
     #>
     param(
         [string]$OutputDir = "$HOME\.ssh"
@@ -243,99 +165,134 @@ function Sync-SSH {
 
         # Process git-sign key based on preference
         $commitSignPref = git config sync-ssh.commit-signing
-        if ([string]::IsNullOrEmpty($commitSignPref)) { $commitSignPref = "yes" }
+        if ([string]::IsNullOrWhiteSpace($commitSignPref)) { $commitSignPref = "yes" }
 
-        if ($commitSignPref -eq "no") {
-            Write-Host "Git SSH commit signing is disabled via preference." -ForegroundColor Yellow
-            git config --global commit.gpgsign false
-        } elseif ($commitSignPref -eq "skip") {
-            Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
-        } elseif ($commitSignPref -eq "yes") {
-            $gitSignMatch = $null
-            foreach ($k in $bwLookup.Keys) {
-                if ($k.ToString().Trim().ToLower() -eq "git-sign") {
-                    $gitSignMatch = $bwLookup[$k]
-                    break
-                }
+        switch ($commitSignPref.ToLower().Trim()) {
+            { $_ -in "no", "false" } {
+                Write-Host "Git SSH commit signing is disabled via preference." -ForegroundColor Yellow
+                git config --global commit.gpgsign false
             }
-
-            if ($gitSignMatch) {
-                if ($gitSignMatch.publicKey) {
-                $signPub = Join-Path $config.KeysDir "git-sign.pub"
-                $newSignPubContent = $gitSignMatch.publicKey.Trim()
-                if (Test-Path $signPub) {
-                    Remove-Item -Path $signPub -Force -ErrorAction SilentlyContinue
+            "skip" {
+                Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
+            }
+            default {
+                $gitSignMatch = $null
+                foreach ($k in $bwLookup.Keys) {
+                    if ($k.ToString().Trim().ToLower() -eq "git-sign") {
+                        $gitSignMatch = $bwLookup[$k]
+                        break
+                    }
                 }
-                $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
 
-                Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
-
-                Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
-                git config --global gpg.format ssh
-                git config --global user.signingkey "$signPub"
-                git config --global commit.gpgsign true
-                git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
-
-                # Determine email for allowed_signers
-                $signingEmail = $gitSignMatch.email
-                if (-not $signingEmail) { $signingEmail = git config user.email }
-
-                if ($signingEmail) {
-                    $pubContent = $gitSignMatch.publicKey.Trim()
-                    $parts = $pubContent -split '\s+'
-                    if ($parts.Count -ge 2) {
-                        $keyType = $parts[0]
-                        $keyBlob = $parts[1]
-                        $allowedFile = "$HOME\.ssh\allowed_signers"
-
-                        $newEntry = "$signingEmail $keyType $keyBlob"
-
-                        if (Test-Path $allowedFile) {
-                            $lines = Get-Content -Path $allowedFile
-                            $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
-                            $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
-                        } else {
-                            $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                if ($gitSignMatch) {
+                    if ($gitSignMatch.publicKey) {
+                        $signPub = Join-Path $config.KeysDir "git-sign.pub"
+                        $newSignPubContent = $gitSignMatch.publicKey.Trim()
+                        if (Test-Path $signPub) {
+                            Remove-Item -Path $signPub -Force -ErrorAction SilentlyContinue
                         }
+                        $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
 
-                        icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+                        Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
 
-                        Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
+                        Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
+                        git config --global gpg.format ssh
+                        git config --global user.signingkey "$signPub"
+                        git config --global commit.gpgsign true
+                        git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
+
+                        # Determine email for allowed_signers
+                        $signingEmail = $gitSignMatch.email
+                        if (-not $signingEmail) { $signingEmail = git config user.email }
+
+                        if ($signingEmail) {
+                            $pubContent = $gitSignMatch.publicKey.Trim()
+                            $parts = $pubContent -split '\s+'
+                            if ($parts.Count -ge 2) {
+                                $keyType = $parts[0]
+                                $keyBlob = $parts[1]
+                                $allowedFile = "$HOME\.ssh\allowed_signers"
+
+                                $newEntry = "$signingEmail $keyType $keyBlob"
+
+                                if (Test-Path $allowedFile) {
+                                    $lines = Get-Content -Path $allowedFile
+                                    $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
+                                    $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                                } else {
+                                    $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
+                                }
+
+                                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                                icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
+
+                                Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
+                            }
+                        } else {
+                            Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty." -ForegroundColor Yellow
                     }
                 } else {
-                    Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
+                    Write-Host "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found." -ForegroundColor Yellow
+                    Write-Host "Available item names in Bitwarden: $($bwLookup.Keys -join ', ')" -ForegroundColor Gray
                 }
-                } else {
-                    Write-Host "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty." -ForegroundColor Yellow
-                }
-            } else {
-                Write-Host "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found." -ForegroundColor Yellow
-                Write-Host "Available item names in Bitwarden: $($bwLookup.Keys -join ', ')" -ForegroundColor Gray
             }
         }
 
-        # Get keys from ssh-agent
-        $keys = Get-SshAgentKeys
-
-        # Process each key
+        # Process each key directly from Bitwarden data
         $newManagedContent = ""
         $processedCount = 0
 
-        foreach ($key in $keys) {
-            $line = $key.ToString().Trim()
+        Write-Host "Processing SSH keys from Bitwarden vault..." -ForegroundColor Cyan
 
-            if ($line -and -not $line.StartsWith("The agent has no identities")) {
-                $parts = $line -split '\s+', 3
+        foreach ($itemName in $bwLookup.Keys) {
+            # Skip git-sign key as it is processed separately
+            if ($itemName -eq "git-sign") { continue }
 
-                if ($parts.Count -ge 3) {
-                    if ($parts[2] -eq "git-sign") { continue }
-                    $entry = Get-SshConfigEntry -KeyData $parts[0] -Type $parts[1] -Comment $parts[2] -BwLookup $bwLookup -KeysDir $config.KeysDir
-                    if ($entry) {
-                        $newManagedContent += $entry
-                        $processedCount++
-                    }
-                }
+            $item = $bwLookup[$itemName]
+            
+            if (-not $item.publicKey) {
+                continue
             }
+
+            $missingAttrs = @()
+            if (-not $item.hostname) { $missingAttrs += "HostName" }
+            if (-not $item.user) { $missingAttrs += "User" }
+
+            if ($missingAttrs.Count -gt 0) {
+                Write-Host "Skipping key '$itemName': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
+                continue
+            }
+
+            $hostname = $item.hostname
+            $user = $item.user
+
+            # Sanitize Host alias (safeName)
+            $safeName = $itemName -replace '[^a-zA-Z0-9._-]', '-'
+            $safeName = $safeName.ToLower().Trim('-')
+            if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = "ssh-key-" + (Get-Random) }
+
+            $pubkeyFile = Join-Path $config.KeysDir "$safeName.pub"
+
+            # Save public key (overwrite securely by deleting existing one first)
+            if (Test-Path $pubkeyFile) {
+                Remove-Item -Path $pubkeyFile -Force -ErrorAction SilentlyContinue
+            }
+            $item.publicKey.Trim() | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
+
+            # Build config entry
+            $entry = "`nHost $safeName`n"
+            $entry += "  HostName $hostname`n"
+            if ($user) {
+                $entry += "  User $user`n"
+            }
+            $entry += "  IdentityFile $pubkeyFile`n"
+            $entry += "  IdentitiesOnly yes`n"
+
+            $newManagedContent += $entry
+            $processedCount++
         }
 
         # Apply SSH KeepAlive preference

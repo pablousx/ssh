@@ -112,38 +112,35 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
-    # Get keys from native SSH agent
-    AGENT_KEYS=$(ssh-add -L 2>/dev/null)
-    EXIT_CODE=$?
-
-    if [ $EXIT_CODE -ne 0 ] || [ -z "$AGENT_KEYS" ] || [[ "$AGENT_KEYS" == "The agent has no identities"* ]]; then
-        log_error "Error: No keys found in ssh-agent or agent not responding."
-        log_warn "Make sure your SSH agent is running and has keys loaded with: ssh-add"
-        return 1
-    fi
-
     # Get Bitwarden data as a JSON array
     BW_DATA=$(get_bitwarden_keys)
 
     # Process git-sign key based on preference
-    COMMIT_SIGN_PREF=$(git config sync-ssh.commit-signing)
-    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="yes" # Default
+    COMMIT_SIGN_PREF=$(git config sync-ssh.commit-signing || echo "yes")
+    # Normalize to lowercase
+    COMMIT_SIGN_PREF=$(echo "$COMMIT_SIGN_PREF" | tr '[:upper:]' '[:lower:]' | xargs)
+    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="yes"
 
-    if [ "$COMMIT_SIGN_PREF" = "no" ]; then
-        log_info "Git SSH commit signing is disabled via preference."
-        git config --global commit.gpgsign false
-    elif [ "$COMMIT_SIGN_PREF" = "skip" ]; then
-        log_info "Skipping Git SSH commit signing configuration."
-    elif [ "$COMMIT_SIGN_PREF" = "yes" ]; then
-        GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
-        if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
+    case "$COMMIT_SIGN_PREF" in
+        no|false)
+            log_info "Git SSH commit signing is disabled via preference."
+            git config --global commit.gpgsign false
+            ;;
+        skip)
+            log_info "Skipping Git SSH commit signing configuration."
+            ;;
+        *)
+            log_info "Searching for 'git-sign' item in Bitwarden..."
+            GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
+            
+            if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
             GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
             GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
 
             if [ -n "$GIT_SIGN_PUB" ] && [ "$GIT_SIGN_PUB" != "null" ]; then
                 SIGN_PUB="$KEYS_DIR/git-sign.pub"
                 echo "$GIT_SIGN_PUB" > "$SIGN_PUB"
-                chmod 644 "$SIGN_PUB"
+                chmod 600 "$SIGN_PUB"
                 log_success "Synced Git signing key from Bitwarden: git-sign"
 
                 log_info "Configuring Git SSH signing with key: git-sign"
@@ -184,61 +181,45 @@ sync_ssh() {
             AVAILABLE_NAMES=$(echo "$BW_DATA" | jq -r '.[] | .name' | paste -sd, -)
             log_info "Available item names in Bitwarden: $AVAILABLE_NAMES"
         fi
-    fi
+    esac
 
     NEW_MANAGED_CONTENT=""
     PROCESSED_COUNT=0
 
-    # Process each key from agent
-    while read -r KEY_LINE; do
-        [ -z "$KEY_LINE" ] && continue
-        [[ "$KEY_LINE" == "The agent has no identities"* ]] && continue
+    # Process each key directly from Bitwarden data
+    while read -r ITEM; do
+        ITEM_NAME=$(echo "$ITEM" | jq -r '.name')
 
-        # Parts: [type] [key-blob] [comment]
-        # awk handles the first two, cut gets the rest (comment may have spaces)
-        TYPE=$(echo "$KEY_LINE" | awk '{print $1}')
-        COMMENT=$(echo "$KEY_LINE" | cut -d' ' -f3-)
+        # Skip git-sign key as it is processed separately (case-insensitive)
+        [[ "${ITEM_NAME,,}" == "git-sign" ]] && continue
 
-        # Skip git-sign key as it is processed separately
-        [ "$COMMENT" = "git-sign" ] && continue
+        HOSTNAME=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
+        USER=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
+        PUBKEY_CONTENT=$(echo "$ITEM" | jq -r '.sshKey.publicKey // empty')
 
-
-        # Reset variables for this key
-        HOSTNAME=""
-        USER=""
-        MATCH=""
-
-        # Find match in BW data array
-        MATCH=$(echo "$BW_DATA" | jq -c --arg comment "$COMMENT" '.[] | select(.name == $comment)' | head -n 1)
-
-        if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
-            HOSTNAME=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
-            USER=$(echo "$MATCH" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
-
-            MISSING_ATTRS=()
-            [ -z "$HOSTNAME" ] && MISSING_ATTRS+=("HostName")
-            [ -z "$USER" ] && MISSING_ATTRS+=("User")
-
-            if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
-                ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
-                log_warn "Skipping key '$COMMENT': Missing custom field(s) in Bitwarden: $ATTRS_STR"
-                continue
-            fi
-        else
-            log_warn "Skipping key '$COMMENT': No matching item found in Bitwarden."
+        if [ -z "$PUBKEY_CONTENT" ]; then
             continue
         fi
 
+        MISSING_ATTRS=()
+        [ -z "$HOSTNAME" ] && MISSING_ATTRS+=("HostName")
+        [ -z "$USER" ] && MISSING_ATTRS+=("User")
+
+        if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
+            ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
+            log_warn "Skipping key '$ITEM_NAME': Missing custom field(s) in Bitwarden: $ATTRS_STR"
+            continue
+        fi
 
         # Sanitize Host alias (safeName)
-        SAFE_NAME=$(echo "$COMMENT" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
+        SAFE_NAME=$(echo "$ITEM_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
         if [ -z "$SAFE_NAME" ]; then
             SAFE_NAME="ssh-key-$RANDOM"
         fi
 
         PUBKEY_FILE="$KEYS_DIR/$SAFE_NAME.pub"
-        echo "$KEY_LINE" > "$PUBKEY_FILE"
-        chmod 644 "$PUBKEY_FILE"
+        echo "$PUBKEY_CONTENT" > "$PUBKEY_FILE"
+        chmod 600 "$PUBKEY_FILE"
 
         # Build config entry
         ENTRY="\nHost $SAFE_NAME\n"
@@ -251,7 +232,7 @@ sync_ssh() {
 
         NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-    done <<< "$AGENT_KEYS"
+    done < <(echo "$BW_DATA" | jq -c '.[]')
 
     # Apply SSH KeepAlive preference
     KEEP_ALIVE_PREF=$(git config sync-ssh.keep-alive)
