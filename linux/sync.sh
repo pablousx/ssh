@@ -112,134 +112,61 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
-    # Get Bitwarden data as a JSON array
-    BW_DATA=$(get_bitwarden_keys)
+    # Get Bitwarden items as a flat JSON array with extracted fields
+    BW_DATA=$(bw list items | jq -c '[.[] | select(.type == 5) | {
+        id: .id,
+        name: .name,
+        hostname: (.fields[]? | select(.name == "HostName") | .value),
+        user: (.fields[]? | select(.name == "User") | .value),
+        pubkey: .sshKey.publicKey,
+        org: .organizationId
+    }]')
 
-    # Process git-sign key based on preference
-    COMMIT_SIGN_PREF=$(git config sync-ssh.commit-signing || echo "yes")
-    # Normalize to lowercase
-    COMMIT_SIGN_PREF=$(echo "$COMMIT_SIGN_PREF" | tr '[:upper:]' '[:lower:]' | xargs)
-    [ -z "$COMMIT_SIGN_PREF" ] && COMMIT_SIGN_PREF="yes"
+    # Process git-sign separately
+    GIT_SIGN=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
+    if [ -n "$GIT_SIGN" ] && [ "$(echo "$GIT_SIGN" | jq -r '.pubkey')" != "null" ]; then
+        SIGN_PUB="$KEYS_DIR/git-sign.pub"
+        echo "$GIT_SIGN" | jq -r '.pubkey' > "$SIGN_PUB"
+        chmod 600 "$SIGN_PUB"
 
-    case "$COMMIT_SIGN_PREF" in
-        no|false)
-            log_info "Git SSH commit signing is disabled via preference."
-            git config --global commit.gpgsign false
-            ;;
-        skip)
-            log_info "Skipping Git SSH commit signing configuration."
-            ;;
-        *)
-            log_info "Searching for 'git-sign' item in Bitwarden..."
-            GIT_SIGN_MATCH=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
-            
-            if [ -n "$GIT_SIGN_MATCH" ] && [ "$GIT_SIGN_MATCH" != "null" ]; then
-            GIT_SIGN_PUB=$(echo "$GIT_SIGN_MATCH" | jq -r '.sshKey.publicKey // empty')
-            GIT_SIGN_EMAIL=$(echo "$GIT_SIGN_MATCH" | jq -r '.fields[]? | select(.name == "Email" or .name == "GitEmail") | .value // empty')
-
-            if [ -n "$GIT_SIGN_PUB" ] && [ "$GIT_SIGN_PUB" != "null" ]; then
-                SIGN_PUB="$KEYS_DIR/git-sign.pub"
-                echo "$GIT_SIGN_PUB" > "$SIGN_PUB"
-                chmod 600 "$SIGN_PUB"
-                log_success "Synced Git signing key from Bitwarden: git-sign"
-
-                log_info "Configuring Git SSH signing with key: git-sign"
-                git config --global gpg.format ssh
-                git config --global user.signingkey "$SIGN_PUB"
-                git config --global commit.gpgsign true
-                git config --global gpg.ssh.allowedSignersFile "$HOME/.ssh/allowed_signers"
-
-                # Determine email for allowed_signers
-                SIGNING_EMAIL="$GIT_SIGN_EMAIL"
-                [ -z "$SIGNING_EMAIL" ] && SIGNING_EMAIL=$(git config user.email)
-
-                if [ -n "$SIGNING_EMAIL" ]; then
-                    KEY_CONTENT=$(echo "$GIT_SIGN_PUB" | awk '{print $1, $2}')
-                    ALLOWED_FILE="$HOME/.ssh/allowed_signers"
-
-                    touch "$ALLOWED_FILE"
-                    chmod 600 "$ALLOWED_FILE"
-
-                    # Remove old entry for this email if exists
-                    if [ -s "$ALLOWED_FILE" ]; then
-                        grep -vF "$SIGNING_EMAIL" "$ALLOWED_FILE" > "${ALLOWED_FILE}.tmp" || true
-                    else
-                        > "${ALLOWED_FILE}.tmp"
-                    fi
-
-                    echo "$SIGNING_EMAIL $KEY_CONTENT" >> "${ALLOWED_FILE}.tmp"
-                    mv "${ALLOWED_FILE}.tmp" "$ALLOWED_FILE"
-                    log_success "Updated $ALLOWED_FILE for $SIGNING_EMAIL"
-                else
-                    log_warn "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update."
-                fi
-            else
-                log_warn "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty."
-            fi
-        else
-            log_warn "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found."
-            AVAILABLE_NAMES=$(echo "$BW_DATA" | jq -r '.[] | .name' | paste -sd, -)
-            log_info "Available item names in Bitwarden: $AVAILABLE_NAMES"
-        fi
-    esac
+        git config --global gpg.format ssh
+        git config --global user.signingkey "$SIGN_PUB"
+        git config --global commit.gpgsign true
+        log_success "Synced Git signing key: git-sign"
+    fi
 
     NEW_MANAGED_CONTENT=""
     PROCESSED_COUNT=0
 
-    # Process each key directly from Bitwarden data
+    # Process items
     while read -r ITEM; do
-        ITEM_ID=$(echo "$ITEM" | jq -r '.id')
-        ITEM_NAME=$(echo "$ITEM" | jq -r '.name')
+        NAME=$(echo "$ITEM" | jq -r '.name')
+        [ "${NAME,,}" == "git-sign" ] && continue
 
-        # Skip git-sign key as it is processed separately (case-insensitive)
-        [[ "${ITEM_NAME,,}" == "git-sign" ]] && continue
+        HOST=$(echo "$ITEM" | jq -r '.hostname // empty')
+        USER=$(echo "$ITEM" | jq -r '.user // empty')
+        PUB=$(echo "$ITEM" | jq -r '.pubkey // empty')
+        ORG=$(echo "$ITEM" | jq -r '.org // empty')
 
-        HOSTNAME=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
-        USER=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
-        PUBKEY_CONTENT=$(echo "$ITEM" | jq -r '.sshKey.publicKey // empty')
-
-        if [ -z "$PUBKEY_CONTENT" ]; then
+        if [ -z "$PUB" ] || [ -z "$HOST" ]; then
+            log_warn "Skipping '$NAME': Missing metadata (HostName or Public Key)"
             continue
         fi
 
-        MISSING_ATTRS=()
-        [ -z "$HOSTNAME" ] && MISSING_ATTRS+=("HostName")
-        [ -z "$USER" ] && MISSING_ATTRS+=("User")
+        [ -n "$ORG" ] && [ "$ORG" != "null" ] && log_warn "Notice: '$NAME' is an Org key."
 
-        if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
-            ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
-            log_warn "Skipping key '$ITEM_NAME': Missing custom field(s) in Bitwarden: $ATTRS_STR"
-            continue
-        fi
+        SAFE_NAME=$(echo "$NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
+        PUB_FILE="$KEYS_DIR/$SAFE_NAME.pub"
+        echo "$PUB" > "$PUB_FILE" && chmod 600 "$PUB_FILE"
 
-        # Check for Organization-owned keys (Bitwarden Agent limitation)
-        ORG_ID=$(echo "$ITEM" | jq -r '.organizationId // empty')
-        if [ -n "$ORG_ID" ] && [ "$ORG_ID" != "null" ]; then
-            log_warn "Notice: '$ITEM_NAME' is an Organization-owned key. If it fails to load, move it to your Personal Vault."
-        fi
-
-        # Sanitize Host alias (safeName)
-        SAFE_NAME=$(echo "$ITEM_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
-        if [ -z "$SAFE_NAME" ]; then
-            SAFE_NAME="ssh-key-$RANDOM"
-        fi
-
-        PUBKEY_FILE="$KEYS_DIR/$SAFE_NAME.pub"
-        echo "$PUBKEY_CONTENT" > "$PUBKEY_FILE"
-        chmod 600 "$PUBKEY_FILE"
-
-        # Build config entry
-        ENTRY="\nHost $SAFE_NAME\n"
-        ENTRY+="  HostName $HOSTNAME\n"
-        if [ -n "$USER" ] && [ "$USER" != "null" ]; then
-            ENTRY+="  User $USER\n"
-        fi
-        ENTRY+="  IdentityFile $PUBKEY_FILE\n"
-        ENTRY+="  IdentitiesOnly yes\n"
+        ENTRY="\nHost $SAFE_NAME\n  HostName $HOST\n"
+        [ -n "$USER" ] && ENTRY+="  User $USER\n"
+        ENTRY+="  IdentityFile $PUB_FILE\n  IdentitiesOnly yes\n"
 
         NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
     done < <(echo "$BW_DATA" | jq -c '.[]')
+
 
     # Apply SSH KeepAlive preference
     KEEP_ALIVE_PREF=$(git config sync-ssh.keep-alive)

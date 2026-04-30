@@ -120,10 +120,10 @@ function Get-BitwardenSshKeys {
     bw sync 2>&1 | Out-Null
 
     Write-Host "Fetching items from Bitwarden..." -ForegroundColor Cyan
-    
+
     # Force output to a single string to prevent array-parsing issues in PowerShell 5.1
     $itemsRaw = bw list items | Out-String
-    
+
     if ([string]::IsNullOrWhiteSpace($itemsRaw)) {
         Write-Host "Warning: Bitwarden returned no items." -ForegroundColor Yellow
         return @{}
@@ -182,144 +182,47 @@ function Sync-SSH {
         # Get Bitwarden SSH key metadata
         $bwLookup = Get-BitwardenSshKeys
 
-        # Process git-sign key based on preference
-        $commitSignPref = git config sync-ssh.commit-signing
-        if ([string]::IsNullOrWhiteSpace($commitSignPref)) { $commitSignPref = "yes" }
+        # Process Git Signing
+        $gitSign = $bwLookup.Values | Where-Object { $_.name -eq "git-sign" } | Select-Object -First 1
+        if ($gitSign -and $gitSign.publicKey) {
+            $signPub = Join-Path $config.KeysDir "git-sign.pub"
+            $gitSign.publicKey.Trim() | Out-File -FilePath $signPub -Encoding utf8 -Force
 
-        switch ($commitSignPref.ToLower().Trim()) {
-            { $_ -in "no", "false" } {
-                Write-Host "Git SSH commit signing is disabled via preference." -ForegroundColor Yellow
-                git config --global commit.gpgsign false
-            }
-            "skip" {
-                Write-Host "Skipping Git SSH commit signing configuration." -ForegroundColor Cyan
-            }
-            default {
-                $gitSignMatch = $null
-                foreach ($id in $bwLookup.Keys) {
-                    $item = $bwLookup[$id]
-                    if ($item.name.Trim().ToLower() -eq "git-sign") {
-                        $gitSignMatch = $item
-                        break
-                    }
-                }
-
-                if ($gitSignMatch) {
-                    if ($gitSignMatch.publicKey) {
-                        $signPub = Join-Path $config.KeysDir "git-sign.pub"
-                        $newSignPubContent = $gitSignMatch.publicKey.Trim()
-                        if (Test-Path $signPub) {
-                            Remove-Item -Path $signPub -Force -ErrorAction SilentlyContinue
-                        }
-                        $newSignPubContent | Out-File -FilePath $signPub -Encoding utf8 -Force
-
-                        Write-Host "Synced Git signing key from Bitwarden: git-sign" -ForegroundColor Green
-
-                        Write-Host "Configuring Git SSH signing with key: git-sign" -ForegroundColor Cyan
-                        git config --global gpg.format ssh
-                        git config --global user.signingkey "$signPub"
-                        git config --global commit.gpgsign true
-                        git config --global gpg.ssh.allowedSignersFile "$HOME\.ssh\allowed_signers"
-
-                        # Determine email for allowed_signers
-                        $signingEmail = $gitSignMatch.email
-                        if (-not $signingEmail) { $signingEmail = git config user.email }
-
-                        if ($signingEmail) {
-                            $pubContent = $gitSignMatch.publicKey.Trim()
-                            $parts = $pubContent -split '\s+'
-                            if ($parts.Count -ge 2) {
-                                $keyType = $parts[0]
-                                $keyBlob = $parts[1]
-                                $allowedFile = "$HOME\.ssh\allowed_signers"
-
-                                $newEntry = "$signingEmail $keyType $keyBlob"
-
-                                if (Test-Path $allowedFile) {
-                                    $lines = Get-Content -Path $allowedFile
-                                    $filteredLines = $lines | Where-Object { $_ -notmatch [regex]::Escape($signingEmail) }
-                                    $filteredLines + $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
-                                } else {
-                                    $newEntry | Out-File -FilePath $allowedFile -Encoding utf8 -Force
-                                }
-
-                                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-                                icacls "$allowedFile" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
-
-                                Write-Host "Updated $allowedFile for $signingEmail" -ForegroundColor Green
-                            }
-                        } else {
-                            Write-Host "Email not found in Bitwarden and Git user.email not set. Skipping allowed_signers update." -ForegroundColor Yellow
-                        }
-                    } else {
-                        Write-Host "Warning: Found Bitwarden item 'git-sign', but its Public Key field is empty." -ForegroundColor Yellow
-                    }
-                } else {
-                    Write-Host "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found." -ForegroundColor Yellow
-                }
-            }
+            git config --global gpg.format ssh
+            git config --global user.signingkey "$signPub"
+            git config --global commit.gpgsign true
+            Write-Host "Synced Git signing key: git-sign" -ForegroundColor Green
         }
 
-        # Process each key directly from Bitwarden data
+        # Sync Loop
         $newManagedContent = ""
         $processedCount = 0
 
-        Write-Host "Processing SSH keys from Bitwarden vault..." -ForegroundColor Cyan
-
         foreach ($id in $bwLookup.Keys) {
             $item = $bwLookup[$id]
-            $itemName = $item.name
-            
-            # Skip git-sign key as it is processed separately
-            if ($itemName.ToLower().Trim() -eq "git-sign") { continue }
-            
-            if (-not $item.publicKey) {
-                Write-Host "Skipping key '$itemName': Public Key field is empty in Bitwarden." -ForegroundColor Yellow
+            if ($item.name -eq "git-sign") { continue }
+
+            if (-not $item.publicKey -or -not $item.hostname) {
+                Write-Host "Skipping '$($item.name)': Missing HostName or Public Key" -ForegroundColor Yellow
                 continue
             }
 
-            $missingAttrs = @()
-            if ([string]::IsNullOrWhiteSpace($item.hostname)) { $missingAttrs += "HostName" }
-            if ([string]::IsNullOrWhiteSpace($item.user)) { $missingAttrs += "User" }
-
-            if ($missingAttrs.Count -gt 0) {
-                Write-Host "Skipping key '$itemName': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
-                continue
-            }
-
-            $hostname = $item.hostname
-            $user = $item.user
-
-            # Check for Organization-owned keys (Bitwarden Agent limitation)
             if ($item.organizationId -and $item.organizationId -ne "00000000-0000-0000-0000-000000000000") {
-                Write-Host "Notice: '$itemName' is an Organization-owned key. If it fails to load, move it to your Personal Vault." -ForegroundColor Yellow
+                Write-Host "Notice: '$($item.name)' is an Org key." -ForegroundColor Yellow
             }
 
-            # Sanitize Host alias (safeName)
-            $safeName = $itemName -replace '[^a-zA-Z0-9._-]', '-'
-            $safeName = $safeName.ToLower().Trim('-')
-            if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = "ssh-key-" + (Get-Random) }
-
-            $pubkeyFile = Join-Path $config.KeysDir "$safeName.pub"
-
-            # Save public key (overwrite securely by deleting existing one first)
-            if (Test-Path $pubkeyFile) {
-                Remove-Item -Path $pubkeyFile -Force -ErrorAction SilentlyContinue
-            }
+            $safeName = $item.name -replace '[^a-zA-Z0-9._-]', '-' -replace '^-|-$', ''
+            $pubkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower()).pub"
             $item.publicKey.Trim() | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
 
-            # Build config entry
-            $entry = "`nHost $safeName`n"
-            $entry += "  HostName $hostname`n"
-            if ($user) {
-                $entry += "  User $user`n"
-            }
-            $entry += "  IdentityFile `"$pubkeyFile`"`n"
-            $entry += "  IdentitiesOnly yes`n"
+            $entry = "`nHost $($safeName.ToLower())`n  HostName $($item.hostname)`n"
+            if ($item.user) { $entry += "  User $($item.user)`n" }
+            $entry += "  IdentityFile `"$pubkeyFile`"`n  IdentitiesOnly yes`n"
 
             $newManagedContent += $entry
             $processedCount++
         }
+
 
 
 
