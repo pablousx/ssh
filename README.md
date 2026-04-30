@@ -107,22 +107,25 @@ The setup script detects if you are on **Native Linux** or **WSL** and configure
 
 ---
 
-## 🧊 WSL Support (Windows Subsystem for Linux)
+## 🧊 SSH Agent Integration
 
-WSL handles SSH differently to ensure seamless integration with your Windows environment.
+### 🐧 Native Linux
+On Native Linux, the Bitwarden Desktop app can act as your SSH agent. 
+- **Enabling**: Open Bitwarden Desktop → Settings → SSH Agent → Enable.
+- **Socket**: The agent typically creates a socket at `~/.bitwarden-ssh-agent.sock`.
+- **Setup**: Our `setup.sh` script automatically exports the `SSH_AUTH_SOCK` variable in `~/.ssh/sync-ssh-env.sh` so your terminal can find it.
 
-> [!IMPORTANT]
-> **For WSL**, you should complete the **Windows Setup** first, then run the **Linux Setup** inside your WSL distro.
+### 🪟 WSL (Windows Subsystem for Linux)
+WSL cannot directly access the Windows SSH agent named pipe. We use a **Unix socket bridge** to connect them.
 
-### How it works
-
-The setup script creates a **Unix socket bridge** that connects your Linux environment to the Windows SSH agent:
+**How it works:**
+The setup script configures a background `socat` process that forwards a local Unix socket (`~/.bitwarden-ssh-agent.sock`) to the Windows SSH agent via `npiperelay.exe`.
 
 ```
-Linux ssh → $SSH_AUTH_SOCK (Unix socket) → socat → npiperelay.exe → Bitwarden named pipe
+Linux ssh → $SSH_AUTH_SOCK (~/.bitwarden-ssh-agent.sock) → socat → npiperelay.exe → Bitwarden Pipe
 ```
 
-This means native Linux tools (`xxh`, `rsync`, `git`, SSH agent forwarding) all work correctly.
+This bridge allows native Linux tools like `xxh`, `rsync`, and `git` to use your Bitwarden keys without re-authenticating.
 
 | Feature | Status |
 | :--- | :---: |
@@ -133,11 +136,12 @@ This means native Linux tools (`xxh`, `rsync`, `git`, SSH agent forwarding) all 
 | `git` native SSH ops | ✅ |
 | Works when Bitwarden is closed | ❌ |
 
-### Prerequisite: `socat` + `npiperelay.exe`
+### Prerequisite: `socat` + `npiperelay.exe` (WSL only)
 
-See the [Prerequisites](#️-prerequisites) section above.
+See the [Prerequisites](#️-prerequisites) section above for installation instructions.
 
 ---
+
 
 ## 📂 Project Structure
 

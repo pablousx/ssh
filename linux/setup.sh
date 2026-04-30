@@ -12,6 +12,7 @@ fi
 REPO_ROOT=$(realpath "$(dirname "$0")/..")
 SYNC_SH="$REPO_ROOT/linux/sync.sh"
 CONFIG_FILE="$HOME/.ssh/sync-ssh-env.sh"
+DEFAULT_BW_SOCK="$HOME/.bitwarden-ssh-agent.sock"
 
 prompt_option() {
     local prompt_text="$1"
@@ -42,8 +43,12 @@ GIT_SIGN=$(prompt_option "1. Git Commit Signing via SSH" "skip")
 KEEP_ALIVE=$(prompt_option "2. SSH KeepAlive" "skip")
 
 WSL_BRIDGE="skip"
+BW_AGENT_LINUX="skip"
+
 if [ "$IS_WSL" = true ]; then
-    WSL_BRIDGE=$(prompt_option "3. WSL SSH Agent Bridge" "yes")
+    WSL_BRIDGE=$(prompt_option "3. WSL SSH Agent Bridge (to Windows)" "yes")
+else
+    BW_AGENT_LINUX=$(prompt_option "3. Use Bitwarden SSH Agent (Native Linux)" "yes")
 fi
 
 echo
@@ -54,6 +59,8 @@ echo "  Git SSH Signing:  $GIT_SIGN"
 echo "  SSH KeepAlive:    $KEEP_ALIVE"
 if [ "$IS_WSL" = true ]; then
     echo "  WSL Agent Bridge: $WSL_BRIDGE"
+else
+    echo "  BW SSH Agent:     $BW_AGENT_LINUX"
 fi
 echo "========================================"
 echo
@@ -70,7 +77,11 @@ fi
 # Persist preferences
 git config --global sync-ssh.commit-signing "$GIT_SIGN"
 git config --global sync-ssh.keep-alive "$KEEP_ALIVE"
-[ "$IS_WSL" = true ] && git config --global sync-ssh.wsl-bridge "$WSL_BRIDGE"
+if [ "$IS_WSL" = true ]; then
+    git config --global sync-ssh.wsl-bridge "$WSL_BRIDGE"
+else
+    git config --global sync-ssh.bw-agent-linux "$BW_AGENT_LINUX"
+fi
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -83,10 +94,11 @@ if [ "$IS_WSL" = true ]; then
 
     cat <<EOF >> "$CONFIG_FILE"
 # WSL-specific: Bridge Bitwarden SSH agent to native Linux ssh
-WSL_BRIDGE_PREF=$(git config sync-ssh.wsl-bridge)
-if [ "$WSL_BRIDGE_PREF" = "yes" ] || [ -z "$WSL_BRIDGE_PREF" ] || [ "$WSL_BRIDGE_PREF" = "skip" ]; then
-    export SSH_AUTH_SOCK="\$HOME/.ssh/bitwarden-agent.sock"
+WSL_BRIDGE_PREF=\$(git config sync-ssh.wsl-bridge)
+if [ "\$WSL_BRIDGE_PREF" = "yes" ] || [ -z "\$WSL_BRIDGE_PREF" ]; then
+    export SSH_AUTH_SOCK="\$HOME/.bitwarden-ssh-agent.sock"
 
+    # Check if agent is responsive, if not, restart bridge
     ssh-add -l &>/dev/null
     if [ \$? -eq 2 ] || [ ! -S "\$SSH_AUTH_SOCK" ]; then
         rm -f "\$SSH_AUTH_SOCK"
@@ -108,7 +120,18 @@ else
     echo "Configuring Linux integration..."
 
     cat <<EOF >> "$CONFIG_FILE"
-# Linux-specific: Use native SSH Agent
+# Linux-specific: Use Bitwarden SSH Agent if enabled
+BW_AGENT_PREF=\$(git config sync-ssh.bw-agent-linux)
+if [ "\$BW_AGENT_PREF" = "yes" ]; then
+    # Default Bitwarden path. Adjust if using Snap or custom location.
+    export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
+
+    if [ ! -S "\$SSH_AUTH_SOCK" ]; then
+        echo "Warning: Bitwarden SSH Agent socket not found at \$SSH_AUTH_SOCK"
+        echo "Ensure 'SSH Agent' is enabled in Bitwarden Desktop settings."
+    fi
+fi
+
 sync-ssh() {
     if [ -z "\$BW_SESSION" ]; then
         echo "Unlocking Bitwarden Vault..."

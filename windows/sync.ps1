@@ -120,25 +120,44 @@ function Get-BitwardenSshKeys {
     bw sync 2>&1 | Out-Null
 
     Write-Host "Fetching items from Bitwarden..." -ForegroundColor Cyan
-    $items = bw list items | ConvertFrom-Json
-    $sshItems = $items | Where-Object { $_.type -eq 5 }
+    
+    # Force output to a single string to prevent array-parsing issues in PowerShell 5.1
+    $itemsRaw = bw list items | Out-String
+    
+    if ([string]::IsNullOrWhiteSpace($itemsRaw)) {
+        Write-Host "Warning: Bitwarden returned no items." -ForegroundColor Yellow
+        return @{}
+    }
 
-    # Create lookup dictionary: name -> (hostname, user, publicKey, email)
+    try {
+        $items = $itemsRaw | ConvertFrom-Json
+    } catch {
+        Write-Host "Error parsing Bitwarden JSON. Try running 'bw sync' manually." -ForegroundColor Red
+        return @{}
+    }
+
+    $sshItems = @($items) | Where-Object { $_.type -eq 5 }
+
+    # Create lookup dictionary: ID -> (name, hostname, user, publicKey, email)
     $bwLookup = @{}
     foreach ($item in $sshItems) {
-        $hostnameField = $item.fields | Where-Object { $_.name -eq "HostName" }
-        $userField = $item.fields | Where-Object { $_.name -eq "User" }
-        $emailField = $item.fields | Where-Object { $_.name -eq "Email" -or $_.name -eq "GitEmail" }
+        # Robust field lookup: find the first field that matches the name (case-insensitive)
+        $fields = @($item.fields)
+        $hostnameField = $fields | Where-Object { $_.name -match "^HostName$" } | Select-Object -First 1
+        $userField     = $fields | Where-Object { $_.name -match "^User$" } | Select-Object -First 1
+        $emailField    = $fields | Where-Object { $_.name -match "^(Email|GitEmail)$" } | Select-Object -First 1
 
-        $bwLookup[$item.name] = @{
-            hostname = if ($hostnameField) { $hostnameField.value } else { $null }
-            user = if ($userField) { $userField.value } else { $null }
-            publicKey = if ($item.sshKey) { $item.sshKey.publicKey } else { $null }
-            email = if ($emailField) { $emailField.value } else { $null }
+        $bwLookup[$item.id] = @{
+            name           = $item.name
+            hostname       = if ($hostnameField) { $hostnameField.value } else { $null }
+            user           = if ($userField) { $userField.value } else { $null }
+            publicKey      = if ($item.sshKey) { $item.sshKey.publicKey } else { $null }
+            email          = if ($emailField) { $emailField.value } else { $null }
+            organizationId = $item.organizationId
         }
     }
 
-    Write-Host "Found $($sshItems.Count) SSH keys in Bitwarden." -ForegroundColor Green
+    Write-Host "Found $($bwLookup.Count) SSH keys in Bitwarden." -ForegroundColor Green
     return $bwLookup
 }
 
@@ -177,9 +196,10 @@ function Sync-SSH {
             }
             default {
                 $gitSignMatch = $null
-                foreach ($k in $bwLookup.Keys) {
-                    if ($k.ToString().Trim().ToLower() -eq "git-sign") {
-                        $gitSignMatch = $bwLookup[$k]
+                foreach ($id in $bwLookup.Keys) {
+                    $item = $bwLookup[$id]
+                    if ($item.name.Trim().ToLower() -eq "git-sign") {
+                        $gitSignMatch = $item
                         break
                     }
                 }
@@ -236,7 +256,6 @@ function Sync-SSH {
                     }
                 } else {
                     Write-Host "Warning: Git SSH signing is enabled, but no Bitwarden item named 'git-sign' was found." -ForegroundColor Yellow
-                    Write-Host "Available item names in Bitwarden: $($bwLookup.Keys -join ', ')" -ForegroundColor Gray
                 }
             }
         }
@@ -247,27 +266,48 @@ function Sync-SSH {
 
         Write-Host "Processing SSH keys from Bitwarden vault..." -ForegroundColor Cyan
 
-        foreach ($itemName in $bwLookup.Keys) {
-            # Skip git-sign key as it is processed separately
-            if ($itemName -eq "git-sign") { continue }
-
-            $item = $bwLookup[$itemName]
+        foreach ($id in $bwLookup.Keys) {
+            $item = $bwLookup[$id]
+            $itemName = $item.name
             
+            # Skip git-sign key as it is processed separately
+            if ($itemName.ToLower().Trim() -eq "git-sign") { 
+                Write-Host "  - Skipping '$itemName' (handled by Git Signing logic)" -ForegroundColor Gray
+                continue 
+            }
+            
+            Write-Host "  - Checking item: '$itemName' (ID: $id)" -ForegroundColor Gray
+
             if (-not $item.publicKey) {
+                Write-Host "    [!] Skipping '$itemName': Public Key field is empty in Bitwarden API response." -ForegroundColor Yellow
                 continue
             }
 
             $missingAttrs = @()
-            if (-not $item.hostname) { $missingAttrs += "HostName" }
-            if (-not $item.user) { $missingAttrs += "User" }
+            if ([string]::IsNullOrWhiteSpace($item.hostname)) { $missingAttrs += "HostName" }
+            if ([string]::IsNullOrWhiteSpace($item.user)) { $missingAttrs += "User" }
 
             if ($missingAttrs.Count -gt 0) {
-                Write-Host "Skipping key '$itemName': Missing custom field(s) in Bitwarden: $($missingAttrs -join ', ')" -ForegroundColor Yellow
+                Write-Host "    [!] Skipping '$itemName': Missing custom field(s): $($missingAttrs -join ', ')" -ForegroundColor Yellow
+                Write-Host "        (Ensure these are 'Text' type custom fields in Bitwarden)" -ForegroundColor Gray
                 continue
             }
 
             $hostname = $item.hostname
             $user = $item.user
+
+            # Check for Organization-owned keys (Bitwarden Agent limitation)
+            if ($item.organizationId -and $item.organizationId -ne "00000000-0000-0000-0000-000000000000") {
+                Write-Host "  ---" -ForegroundColor Yellow
+                Write-Host "  ⚠️  Notice: '$itemName' (ID: $id) is an Organization-owned key." -ForegroundColor Yellow
+                Write-Host "     Bitwarden Desktop's SSH Agent does NOT support organization keys." -ForegroundColor Yellow
+                Write-Host "     To use this key, either:" -ForegroundColor Gray
+                Write-Host "     1. Move it to your Personal Vault (Recommended)" -ForegroundColor Gray
+                Write-Host "     2. Run: bw get item $id | jq -r .sshKey.privateKey | ssh-add -" -ForegroundColor Gray
+                Write-Host "  ---" -ForegroundColor Yellow
+            }
+
+            Write-Host "    [+] Found valid metadata: HostName=$hostname, User=$user" -ForegroundColor DarkGray
 
             # Sanitize Host alias (safeName)
             $safeName = $itemName -replace '[^a-zA-Z0-9._-]', '-'
@@ -288,12 +328,15 @@ function Sync-SSH {
             if ($user) {
                 $entry += "  User $user`n"
             }
-            $entry += "  IdentityFile $pubkeyFile`n"
+            $entry += "  IdentityFile `"$pubkeyFile`"`n"
             $entry += "  IdentitiesOnly yes`n"
 
             $newManagedContent += $entry
             $processedCount++
+            Write-Host "    [OK] Added to config as 'Host $safeName'" -ForegroundColor Green
         }
+
+
 
         # Apply SSH KeepAlive preference
         $keepAlivePref = git config sync-ssh.keep-alive

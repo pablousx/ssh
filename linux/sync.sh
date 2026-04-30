@@ -188,16 +188,23 @@ sync_ssh() {
 
     # Process each key directly from Bitwarden data
     while read -r ITEM; do
+        ITEM_ID=$(echo "$ITEM" | jq -r '.id')
         ITEM_NAME=$(echo "$ITEM" | jq -r '.name')
 
         # Skip git-sign key as it is processed separately (case-insensitive)
-        [[ "${ITEM_NAME,,}" == "git-sign" ]] && continue
+        if [[ "${ITEM_NAME,,}" == "git-sign" ]]; then
+            log_info "  - Skipping '$ITEM_NAME' (handled by Git Signing logic)"
+            continue
+        fi
+
+        log_info "  - Checking item: '$ITEM_NAME' (ID: $ITEM_ID)"
 
         HOSTNAME=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "HostName") | .value // empty')
         USER=$(echo "$ITEM" | jq -r '.fields[]? | select(.name == "User") | .value // empty')
         PUBKEY_CONTENT=$(echo "$ITEM" | jq -r '.sshKey.publicKey // empty')
 
         if [ -z "$PUBKEY_CONTENT" ]; then
+            log_warn "    [!] Skipping '$ITEM_NAME': Public Key field is empty in Bitwarden API response."
             continue
         fi
 
@@ -207,9 +214,20 @@ sync_ssh() {
 
         if [ ${#MISSING_ATTRS[@]} -gt 0 ]; then
             ATTRS_STR=$(IFS=,; echo "${MISSING_ATTRS[*]}")
-            log_warn "Skipping key '$ITEM_NAME': Missing custom field(s) in Bitwarden: $ATTRS_STR"
+            log_warn "    [!] Skipping '$ITEM_NAME': Missing custom field(s): $ATTRS_STR"
+            log_info "        (Ensure these are 'Text' type custom fields in Bitwarden)"
             continue
         fi
+
+        # Check for Organization-owned keys (Bitwarden Agent limitation)
+        ORG_ID=$(echo "$ITEM" | jq -r '.organizationId // empty')
+        if [ -n "$ORG_ID" ] && [ "$ORG_ID" != "null" ]; then
+            log_warn "    [!] Notice: '$ITEM_NAME' is an Organization-owned key."
+            log_warn "        If this key doesn't show up in 'ssh-add -l', it's because Bitwarden Desktop"
+            log_warn "        often ignores Organization keys in its agent. Move it to your Personal Vault to fix."
+        fi
+
+        log_info "    [+] Found valid metadata: HostName=$HOSTNAME, User=$USER"
 
         # Sanitize Host alias (safeName)
         SAFE_NAME=$(echo "$ITEM_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
@@ -232,6 +250,7 @@ sync_ssh() {
 
         NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+        log_success "    [OK] Added to config as 'Host $SAFE_NAME'"
     done < <(echo "$BW_DATA" | jq -c '.[]')
 
     # Apply SSH KeepAlive preference
