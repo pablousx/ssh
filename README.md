@@ -131,10 +131,13 @@ This bridge allows native Linux tools like `xxh`, `rsync`, and `git` to use your
 | :--- | :---: |
 | SSH agent works | ✅ |
 | `xxh` (portable shell) | ✅ |
-| SSH agent forwarding (`-A`) | ✅ |
+| SSH agent forwarding (`-A`) | ⚠️ |
 | `rsync` native | ✅ |
 | `git` native SSH ops | ✅ |
 | Works when Bitwarden is closed | ❌ |
+
+> **⚠️ Warning on Agent Forwarding (`ssh -A`) in WSL:** 
+> While agent forwarding works flawlessly on Native Windows, using `ssh -A` from within WSL can crash the Bitwarden Desktop app. The `socat` + `npiperelay.exe` bridge struggles with concurrent connection multiplexing (which happens when a remote host requests your keys). If Bitwarden crashes, you will see `communication with agent failed` and must restart the Bitwarden UI. We recommend avoiding `-A` in WSL and using `ProxyJump` in your SSH config instead.
 
 ### Prerequisite: `socat` + `npiperelay.exe` (WSL only)
 

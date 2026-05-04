@@ -39,21 +39,20 @@ echo "========================================"
 echo "Detected OS: $OS_NAME"
 echo
 
-GIT_SIGN=$(prompt_option "1. Git Commit Signing via SSH" "skip")
-KEEP_ALIVE=$(prompt_option "2. SSH KeepAlive" "skip")
+GIT_SIGN=$(prompt_option "1. Would you like to enable Git Commit Signing via SSH?" "skip")
+KEEP_ALIVE=$(prompt_option "2. Would you like to enable SSH KeepAlive?" "skip")
 
 WSL_BRIDGE="skip"
 BW_AGENT_LINUX="skip"
 
 if [ "$IS_WSL" = true ]; then
-    WSL_BRIDGE=$(prompt_option "3. WSL SSH Agent Bridge (to Windows)" "yes")
+    WSL_BRIDGE=$(prompt_option "3. Would you like to set up the WSL SSH Agent Bridge (to Windows)?" "yes")
 else
-    BW_AGENT_LINUX=$(prompt_option "3. Use Bitwarden SSH Agent (Native Linux)" "yes")
+    BW_AGENT_LINUX=$(prompt_option "3. Would you like to use the Bitwarden SSH Agent (Native Linux)?" "yes")
 fi
 
-echo
-echo "========================================"
-echo "Final Confirmation:"
+echo -e "\n========================================"
+echo "Configuration Summary:"
 echo "  OS:               $OS_NAME"
 echo "  Git SSH Signing:  $GIT_SIGN"
 echo "  SSH KeepAlive:    $KEEP_ALIVE"

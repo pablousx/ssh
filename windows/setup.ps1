@@ -65,13 +65,13 @@ function Prompt-Option {
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Sync-SSH Interactive Setup" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Detected OS: Windows`n" -ForegroundColor Cyan
+Write-Host "Detected OS: Windows" -ForegroundColor Cyan
 
-$gitSign = Prompt-Option "1. Git Commit Signing via SSH" "skip"
-$keepAlive = Prompt-Option "2. SSH KeepAlive" "skip"
+$gitSign = Prompt-Option "1. Would you like to enable Git Commit Signing via SSH?" "skip"
+$keepAlive = Prompt-Option "2. Would you like to enable SSH KeepAlive?" "skip"
 
 Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "Final Confirmation:" -ForegroundColor Cyan
+Write-Host "Configuration Summary:" -ForegroundColor Cyan
 Write-Host "  OS:               Windows" -ForegroundColor Cyan
 Write-Host "  Git SSH Signing:  $gitSign" -ForegroundColor Cyan
 Write-Host "  SSH KeepAlive:    $keepAlive" -ForegroundColor Cyan
