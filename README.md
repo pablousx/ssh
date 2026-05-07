@@ -110,7 +110,7 @@ The setup script detects if you are on **Native Linux** or **WSL** and configure
 ## 🧊 SSH Agent Integration
 
 ### 🐧 Native Linux
-On Native Linux, the Bitwarden Desktop app can act as your SSH agent. 
+On Native Linux, the Bitwarden Desktop app can act as your SSH agent.
 - **Enabling**: Open Bitwarden Desktop → Settings → SSH Agent → Enable.
 - **Socket**: The agent typically creates a socket at `~/.bitwarden-ssh-agent.sock`.
 - **Setup**: Our `setup.sh` script automatically exports the `SSH_AUTH_SOCK` variable in `~/.ssh/sync-ssh-env.sh` so your terminal can find it.
@@ -131,13 +131,13 @@ This bridge allows native Linux tools like `xxh`, `rsync`, and `git` to use your
 | :--- | :---: |
 | SSH agent works | ✅ |
 | `xxh` (portable shell) | ✅ |
-| SSH agent forwarding (`-A`) | ⚠️ |
+| SSH agent forwarding (`-A`) | ✅ |
 | `rsync` native | ✅ |
 | `git` native SSH ops | ✅ |
 | Works when Bitwarden is closed | ❌ |
 
-> **⚠️ Warning on Agent Forwarding (`ssh -A`) in WSL:** 
-> While agent forwarding works flawlessly on Native Windows, using `ssh -A` from within WSL can crash the Bitwarden Desktop app. The `socat` + `npiperelay.exe` bridge struggles with concurrent connection multiplexing (which happens when a remote host requests your keys). If Bitwarden crashes, you will see `communication with agent failed` and must restart the Bitwarden UI. We recommend avoiding `-A` in WSL and using `ProxyJump` in your SSH config instead.
+> **💡 Note on connection drops:**
+> If the Bitwarden Desktop app is restarted or updated, the WSL bridge connection might drop. You can instantly recover it by running `reset-ssh-agent` in your terminal, which will recreate the `socat` bridge without needing to restart your WSL instance.
 
 ### Prerequisite: `socat` + `npiperelay.exe` (WSL only)
 

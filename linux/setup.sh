@@ -97,9 +97,10 @@ WSL_BRIDGE_PREF=\$(git config sync-ssh.wsl-bridge)
 if [ "\$WSL_BRIDGE_PREF" = "yes" ] || [ -z "\$WSL_BRIDGE_PREF" ]; then
     export SSH_AUTH_SOCK="\$HOME/.bitwarden-ssh-agent.sock"
 
-    # Check if agent is responsive, if not, restart bridge
-    ssh-add -l &>/dev/null
-    if [ \$? -eq 2 ] || [ ! -S "\$SSH_AUTH_SOCK" ]; then
+    # Use pgrep to check if socat is already running instead of probing with ssh-add,
+    # as concurrent probes (e.g. from Zellij opening multiple panes) can overwhelm
+    # and deadlock the Bitwarden Windows named pipe.
+    if ! pgrep -f "socat UNIX-LISTEN:\$SSH_AUTH_SOCK" > /dev/null; then
         rm -f "\$SSH_AUTH_SOCK"
         (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \\
             EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
@@ -113,6 +114,23 @@ sync-ssh() {
         export BW_SESSION=\$(bw unlock --raw)
     fi
     bash "$SYNC_SH"
+}
+
+# Helper to forcefully restart the SSH bridge if the connection ever dies
+# (e.g. if Bitwarden is restarted on Windows)
+reset-ssh-agent() {
+    echo "Resetting Bitwarden SSH Agent bridge..."
+    pkill -f "socat UNIX-LISTEN:\$SSH_AUTH_SOCK" 2>/dev/null
+    pkill -f "npiperelay.exe" 2>/dev/null
+    rm -f "\$SSH_AUTH_SOCK"
+
+    (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \\
+        EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
+        &>/dev/null &)
+
+    echo "Bridge restarted. Testing connection..."
+    sleep 1
+    ssh-add -l
 }
 EOF
 else
