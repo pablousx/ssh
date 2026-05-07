@@ -37,19 +37,17 @@ To allow the sync to work, your Bitwarden items must be configured correctly.
 - `jq` (Required for **Linux & WSL**)
 - `git`
 - **WSL only**: `socat` (`sudo apt install socat -y`)
-- **WSL only**: `npiperelay.exe` — Binaries are not available, so you must **build it from source** (requires [Go](https://go.dev/doc/install)):
+- **WSL only**: `npiperelay.exe` — You must use the patched version from `rupor-github` which fixes the Bitwarden disconnect crashes.:
   ```bash
-  # 1. Install Go (https://go.dev/doc/install)
-  sudo apt update && sudo apt install golang-go -y
+  # 1. Download the latest release zip
+  curl -sL https://github.com/rupor-github/wsl-ssh-agent/releases/latest/download/wsl-ssh-agent.zip -o /tmp/wsl-ssh-agent.zip
 
-  # 2. Clone the repo
-  git clone https://github.com/jstarks/npiperelay $HOME/npiperelay
+  # 2. Extract npiperelay.exe to a Windows path (e.g. C:\tools)
+  mkdir -p /mnt/c/tools
+  unzip -p /tmp/wsl-ssh-agent.zip npiperelay.exe > /mnt/c/tools/npiperelay.exe
+  chmod +x /mnt/c/tools/npiperelay.exe
 
-  # 3. Build the Windows binary from WSL
-  cd $HOME/npiperelay
-  GOOS=windows go build -o /mnt/c/tools/npiperelay.exe .
-
-  # 4. Symlink it into your WSL path
+  # 3. Symlink it into your WSL path
   sudo ln -s /mnt/c/tools/npiperelay.exe /usr/local/bin/npiperelay.exe
   ```
 

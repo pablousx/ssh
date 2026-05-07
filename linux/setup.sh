@@ -141,9 +141,10 @@ else
 BW_AGENT_PREF=\$(git config sync-ssh.bw-agent-linux)
 if [ "\$BW_AGENT_PREF" = "yes" ]; then
     # Default Bitwarden path. Adjust if using Snap or custom location.
-    export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
-
-    if [ ! -S "\$SSH_AUTH_SOCK" ]; then
+    if [ -S "$DEFAULT_BW_SOCK" ]; then
+        export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
+    elif [ -z "\$SSH_AUTH_SOCK" ] || [ ! -S "\$SSH_AUTH_SOCK" ]; then
+        export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
         echo "Warning: Bitwarden SSH Agent socket not found at \$SSH_AUTH_SOCK"
         echo "Ensure 'SSH Agent' is enabled in Bitwarden Desktop settings."
     fi
