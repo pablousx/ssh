@@ -51,6 +51,11 @@ else
     BW_AGENT_LINUX=$(prompt_option "3. Would you like to use the Bitwarden SSH Agent (Native Linux)?" "yes")
 fi
 
+EXPORT_PRIV="skip"
+if [ "$WSL_BRIDGE" != "yes" ] && [ "$BW_AGENT_LINUX" != "yes" ]; then
+    EXPORT_PRIV=$(prompt_option "4. Would you like to export private keys to disk (Insecure headless mode)?" "skip")
+fi
+
 echo -e "\n========================================"
 echo "Configuration Summary:"
 echo "  OS:               $OS_NAME"
@@ -61,6 +66,7 @@ if [ "$IS_WSL" = true ]; then
 else
     echo "  BW SSH Agent:     $BW_AGENT_LINUX"
 fi
+echo "  Export Private Keys: $EXPORT_PRIV"
 echo "========================================"
 echo
 
@@ -81,6 +87,7 @@ if [ "$IS_WSL" = true ]; then
 else
     git config --global sync-ssh.bw-agent-linux "$BW_AGENT_LINUX"
 fi
+git config --global sync-ssh.export-private-keys "$EXPORT_PRIV"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"

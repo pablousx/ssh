@@ -119,8 +119,11 @@ sync_ssh() {
         hostname: (.fields[]? | select(.name == "HostName") | .value),
         user: (.fields[]? | select(.name == "User") | .value),
         pubkey: .sshKey.publicKey,
+        privkey: .sshKey.privateKey,
         org: .organizationId
     }]')
+
+    EXPORT_PRIV_PREF=$(git config sync-ssh.export-private-keys)
 
     # Process git-sign separately
     GIT_SIGN=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
@@ -128,6 +131,15 @@ sync_ssh() {
         SIGN_PUB="$KEYS_DIR/git-sign.pub"
         echo "$GIT_SIGN" | jq -r '.pubkey' > "$SIGN_PUB"
         chmod 600 "$SIGN_PUB"
+
+        if [ "$EXPORT_PRIV_PREF" = "yes" ]; then
+            SIGN_PRIV_VAL=$(echo "$GIT_SIGN" | jq -r '.privkey // empty')
+            if [ -n "$SIGN_PRIV_VAL" ] && [ "$SIGN_PRIV_VAL" != "null" ]; then
+                SIGN_PRIV="$KEYS_DIR/git-sign"
+                echo "$SIGN_PRIV_VAL" > "$SIGN_PRIV"
+                chmod 600 "$SIGN_PRIV"
+            fi
+        fi
 
         git config --global gpg.format ssh
         git config --global user.signingkey "$SIGN_PUB"
@@ -146,6 +158,7 @@ sync_ssh() {
         HOST=$(echo "$ITEM" | jq -r '.hostname // empty')
         USER=$(echo "$ITEM" | jq -r '.user // empty')
         PUB=$(echo "$ITEM" | jq -r '.pubkey // empty')
+        PRIV=$(echo "$ITEM" | jq -r '.privkey // empty')
         ORG=$(echo "$ITEM" | jq -r '.org // empty')
 
         if [ -z "$PUB" ] || [ -z "$HOST" ]; then
@@ -159,9 +172,17 @@ sync_ssh() {
         PUB_FILE="$KEYS_DIR/$SAFE_NAME.pub"
         echo "$PUB" > "$PUB_FILE" && chmod 600 "$PUB_FILE"
 
+        IDENTITY_FILE="$PUB_FILE"
+
+        if [ "$EXPORT_PRIV_PREF" = "yes" ] && [ -n "$PRIV" ] && [ "$PRIV" != "null" ]; then
+            PRIV_FILE="$KEYS_DIR/$SAFE_NAME"
+            echo "$PRIV" > "$PRIV_FILE" && chmod 600 "$PRIV_FILE"
+            IDENTITY_FILE="$PRIV_FILE"
+        fi
+
         ENTRY="\nHost $SAFE_NAME\n  HostName $HOST\n"
         [ -n "$USER" ] && ENTRY+="  User $USER\n"
-        ENTRY+="  IdentityFile $PUB_FILE\n  IdentitiesOnly yes\n"
+        ENTRY+="  IdentityFile $IDENTITY_FILE\n  IdentitiesOnly yes\n"
 
         NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))

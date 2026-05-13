@@ -152,6 +152,7 @@ function Get-BitwardenSshKeys {
             hostname       = if ($hostnameField) { $hostnameField.value } else { $null }
             user           = if ($userField) { $userField.value } else { $null }
             publicKey      = if ($item.sshKey) { $item.sshKey.publicKey } else { $null }
+            privateKey     = if ($item.sshKey) { $item.sshKey.privateKey } else { $null }
             email          = if ($emailField) { $emailField.value } else { $null }
             organizationId = $item.organizationId
         }
@@ -182,11 +183,19 @@ function Sync-SSH {
         # Get Bitwarden SSH key metadata
         $bwLookup = Get-BitwardenSshKeys
 
+        # Get export private keys preference
+        $exportPrivPref = git config sync-ssh.export-private-keys
+
         # Process Git Signing
         $gitSign = $bwLookup.Values | Where-Object { $_.name -eq "git-sign" } | Select-Object -First 1
         if ($gitSign -and $gitSign.publicKey) {
             $signPub = Join-Path $config.KeysDir "git-sign.pub"
             $gitSign.publicKey.Trim() | Out-File -FilePath $signPub -Encoding utf8 -Force
+
+            if ($exportPrivPref -eq "yes" -and $gitSign.privateKey) {
+                $signPriv = Join-Path $config.KeysDir "git-sign"
+                $gitSign.privateKey.Trim() | Out-File -FilePath $signPriv -Encoding utf8 -Force
+            }
 
             git config --global gpg.format ssh
             git config --global user.signingkey "$signPub"
@@ -215,9 +224,17 @@ function Sync-SSH {
             $pubkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower()).pub"
             $item.publicKey.Trim() | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
 
+            $identityFile = $pubkeyFile
+
+            if ($exportPrivPref -eq "yes" -and $item.privateKey) {
+                $privkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower())"
+                $item.privateKey.Trim() | Out-File -FilePath $privkeyFile -Encoding utf8 -Force
+                $identityFile = $privkeyFile
+            }
+
             $entry = "`nHost $($safeName.ToLower())`n  HostName $($item.hostname)`n"
             if ($item.user) { $entry += "  User $($item.user)`n" }
-            $entry += "  IdentityFile `"$pubkeyFile`"`n  IdentitiesOnly yes`n"
+            $entry += "  IdentityFile `"$identityFile`"`n  IdentitiesOnly yes`n"
 
             $newManagedContent += $entry
             $processedCount++

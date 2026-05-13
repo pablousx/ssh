@@ -69,12 +69,20 @@ Write-Host "Detected OS: Windows" -ForegroundColor Cyan
 
 $gitSign = Prompt-Option "1. Would you like to enable Git Commit Signing via SSH?" "skip"
 $keepAlive = Prompt-Option "2. Would you like to enable SSH KeepAlive?" "skip"
+$bwAgent = Prompt-Option "3. Are you using Bitwarden Desktop (with SSH Agent)?" "yes"
+
+$exportPriv = "skip"
+if ($bwAgent -ne "yes") {
+    $exportPriv = Prompt-Option "4. Would you like to export private keys to disk (Insecure headless mode)?" "skip"
+}
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Configuration Summary:" -ForegroundColor Cyan
 Write-Host "  OS:               Windows" -ForegroundColor Cyan
 Write-Host "  Git SSH Signing:  $gitSign" -ForegroundColor Cyan
 Write-Host "  SSH KeepAlive:    $keepAlive" -ForegroundColor Cyan
+Write-Host "  BW Desktop Agent: $bwAgent" -ForegroundColor Cyan
+Write-Host "  Export Private Keys: $exportPriv" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 $confirm = Read-Host "`nProceed with these settings? (y/n) [default: y]"
@@ -89,6 +97,7 @@ if ($confirm -ne "y" -and $confirm -ne "yes") {
 # Persist preferences
 git config --global sync-ssh.commit-signing $gitSign
 git config --global sync-ssh.keep-alive $keepAlive
+git config --global sync-ssh.export-private-keys $exportPriv
 
 # Add to PowerShell profile
 Add-ToProfile
