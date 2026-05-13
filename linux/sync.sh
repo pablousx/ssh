@@ -48,7 +48,7 @@ initialize_ssh_config() {
 
     if [ ! -f "$SSH_CONFIG_FILE" ]; then
         log_info "Creating default config at $SSH_CONFIG_FILE"
-        echo -e "Host *\n  Port 22\n  AddKeysToAgent yes\n" > "$SSH_CONFIG_FILE"
+        echo -e "Host *\n  Port 22\n  AddKeysToAgent yes\n  ForwardAgent no\n" > "$SSH_CONFIG_FILE"
     fi
 
     # Ensure markers exist

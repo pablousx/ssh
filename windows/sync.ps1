@@ -36,7 +36,7 @@ function Initialize-SshConfig {
     # Ensure the config file exists
     if (-not (Test-Path $SshConfig)) {
         New-Item -ItemType File -Path $SshConfig -Force | Out-Null
-        $defaultConfig = "Host *`n  Port 22`n  AddKeysToAgent yes`n`n"
+        $defaultConfig = "Host *`n  Port 22`n  AddKeysToAgent yes`n  ForwardAgent no`n`n"
         $defaultConfig | Out-File -FilePath $SshConfig -Encoding utf8
     }
     icacls "$SshConfig" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
