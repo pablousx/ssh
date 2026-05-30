@@ -91,21 +91,18 @@ function Unlock-BitwardenVault {
     if ($bwStatus -eq 'locked' -or -not $env:BW_SESSION) {
 
         Write-Host "Bitwarden Vault: $bwStatus" -ForegroundColor Yellow
-        $secPass = Read-Host -AsSecureString "Bitwarden Master Password"
-        $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secPass)
-        $env:BW_PASSWORD = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr)
-
         Write-Host "Unlocking vault..."
-        $unlockOutput = bw unlock --passwordenv BW_PASSWORD --raw
 
-        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-        $env:BW_PASSWORD = $null
+        $unlockOutput = bw unlock --raw | Out-String
 
         if ($LASTEXITCODE -eq 0) {
-            $sessionKey = if ($unlockOutput -is [array]) { $unlockOutput[-1] } else { $unlockOutput }
-            # Trim whitespace safely
-            $env:BW_SESSION = $sessionKey.Trim()
-            Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
+            if ($unlockOutput -match '([A-Za-z0-9+/=_-]{80,})') {
+                $env:BW_SESSION = $matches[1]
+                Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
+            } else {
+                Write-Host "[ERROR] Could not extract session key" -ForegroundColor Red
+                throw "Failed to extract session key"
+            }
         } else {
             Write-Host "[ERROR] Failed to unlock vault" -ForegroundColor Red
             throw "Failed to unlock Bitwarden vault"
@@ -130,12 +127,12 @@ function Get-BitwardenSshKeys {
     #>
 
     Write-Host "Syncing Bitwarden vault..." -ForegroundColor Cyan
-    bw --session $env:BW_SESSION sync 2>&1 | Out-Null
+    bw sync 2>&1 | Out-Null
 
     Write-Host "Fetching items from Bitwarden..." -ForegroundColor Cyan
 
     # Force output to a single string to prevent array-parsing issues in PowerShell 5.1
-    $itemsRaw = bw --session $env:BW_SESSION list items | Out-String
+    $itemsRaw = bw list items | Out-String
 
     if ([string]::IsNullOrWhiteSpace($itemsRaw)) {
         Write-Host "Warning: Bitwarden returned no items." -ForegroundColor Yellow
