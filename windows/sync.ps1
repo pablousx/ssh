@@ -83,7 +83,12 @@ function Unlock-BitwardenVault {
     $bwStatusJson = bw status | ConvertFrom-Json
     $bwStatus = $bwStatusJson.status
 
-    if (-not $env:BW_SESSION) {
+    if ($bwStatus -eq 'unauthenticated') {
+        Write-Host "[ERROR] Bitwarden is not logged in. Please run 'bw login' first." -ForegroundColor Red
+        throw "Bitwarden not logged in"
+    }
+
+    if ($bwStatus -eq 'locked' -or -not $env:BW_SESSION) {
 
         Write-Host "Bitwarden Vault: $bwStatus" -ForegroundColor Yellow
         Write-Host "Unlocking vault..."
@@ -91,7 +96,8 @@ function Unlock-BitwardenVault {
         $unlockOutput = bw unlock --raw
 
         if ($LASTEXITCODE -eq 0) {
-            $env:BW_SESSION = $unlockOutput
+            $sessionKey = if ($unlockOutput -is [array]) { $unlockOutput[-1] } else { $unlockOutput }
+            $env:BW_SESSION = $sessionKey.Trim()
             Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] Failed to unlock vault" -ForegroundColor Red

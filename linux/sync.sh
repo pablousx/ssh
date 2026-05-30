@@ -83,12 +83,14 @@ unlock_vault() {
         exit 1
     fi
 
-    if [ -z "$BW_SESSION" ]; then
+    if [ "$STATUS" = "locked" ] || [ -z "$BW_SESSION" ]; then
 
         log_warn "Bitwarden Vault: $STATUS"
         log_info "Unlocking vault..."
-        BW_SESSION=$(bw unlock --raw)
+        RAW_UNLOCK=$(bw unlock --raw)
         if [ $? -eq 0 ]; then
+            # Extract just the last line in case of update warnings and trim whitespace
+            BW_SESSION=$(echo "$RAW_UNLOCK" | tail -n 1 | tr -d '[:space:]')
             export BW_SESSION
             log_success "[OK] Vault unlocked successfully!"
         else
