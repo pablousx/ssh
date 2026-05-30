@@ -86,11 +86,19 @@ unlock_vault() {
     if [ "$STATUS" = "locked" ] || [ -z "$BW_SESSION" ]; then
 
         log_warn "Bitwarden Vault: $STATUS"
+
+        # Read password silently and securely
+        read -s -p "Bitwarden Master Password: " BW_PASSWORD
+        echo "" >&2
+        export BW_PASSWORD
+
         log_info "Unlocking vault..."
-        RAW_UNLOCK=$(bw unlock --raw)
+        RAW_UNLOCK=$(bw unlock --passwordenv BW_PASSWORD --raw)
+        export BW_PASSWORD=""
+
         if [ $? -eq 0 ]; then
-            # Extract just the last line and strip any ANSI escape codes
-            BW_SESSION=$(echo "$RAW_UNLOCK" | tail -n 1 | tr -cd 'A-Za-z0-9+/=_-')
+            # Extract just the last line and safely trim whitespace
+            BW_SESSION=$(echo "$RAW_UNLOCK" | tail -n 1 | tr -d '[:space:]')
             export BW_SESSION
             log_success "[OK] Vault unlocked successfully!"
         else
@@ -115,10 +123,10 @@ sync_ssh() {
     unlock_vault
 
     log_info "Syncing Bitwarden vault..."
-    bw sync --session "$BW_SESSION" > /dev/null
+    bw --session "$BW_SESSION" sync > /dev/null
 
     # Get Bitwarden items as a flat JSON array with extracted fields
-    BW_DATA=$(bw list items --session "$BW_SESSION" | jq -c '[.[] | select(.type == 5) | {
+    BW_DATA=$(bw --session "$BW_SESSION" list items | jq -c '[.[] | select(.type == 5) | {
         id: .id,
         name: .name,
         hostname: (.fields[]? | select(.name == "HostName") | .value),

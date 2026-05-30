@@ -116,9 +116,12 @@ if [ "\$WSL_BRIDGE_PREF" = "yes" ] || [ -z "\$WSL_BRIDGE_PREF" ]; then
 fi
 
 sync-ssh() {
-    if [ -z "\$BW_SESSION" ]; then
-        echo "Unlocking Bitwarden Vault..."
-        export BW_SESSION=\$(bw unlock --raw)
+    if [ -z "\$BW_SESSION" ] || [ "\$(bw status | jq -r '.status')" = "locked" ]; then
+        read -s -p "Bitwarden Master Password: " BW_PASSWORD
+        echo "" >&2
+        export BW_PASSWORD
+        export BW_SESSION=\$(bw unlock --passwordenv BW_PASSWORD --raw | tail -n 1 | tr -d '[:space:]')
+        export BW_PASSWORD=""
     fi
     bash "$SYNC_SH"
 }
