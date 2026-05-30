@@ -89,8 +89,8 @@ unlock_vault() {
         log_info "Unlocking vault..."
         RAW_UNLOCK=$(bw unlock --raw)
         if [ $? -eq 0 ]; then
-            # Extract just the last line in case of update warnings and trim whitespace
-            BW_SESSION=$(echo "$RAW_UNLOCK" | tail -n 1 | tr -d '[:space:]')
+            # Extract just the last line and strip any ANSI escape codes
+            BW_SESSION=$(echo "$RAW_UNLOCK" | tail -n 1 | tr -cd 'A-Za-z0-9+/=_-')
             export BW_SESSION
             log_success "[OK] Vault unlocked successfully!"
         else
@@ -114,8 +114,11 @@ sync_ssh() {
     initialize_ssh_config
     unlock_vault
 
+    log_info "Syncing Bitwarden vault..."
+    bw sync --session "$BW_SESSION" > /dev/null
+
     # Get Bitwarden items as a flat JSON array with extracted fields
-    BW_DATA=$(bw list items | jq -c '[.[] | select(.type == 5) | {
+    BW_DATA=$(bw list items --session "$BW_SESSION" | jq -c '[.[] | select(.type == 5) | {
         id: .id,
         name: .name,
         hostname: (.fields[]? | select(.name == "HostName") | .value),

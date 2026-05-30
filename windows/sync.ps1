@@ -97,7 +97,8 @@ function Unlock-BitwardenVault {
 
         if ($LASTEXITCODE -eq 0) {
             $sessionKey = if ($unlockOutput -is [array]) { $unlockOutput[-1] } else { $unlockOutput }
-            $env:BW_SESSION = $sessionKey.Trim()
+            # Strip all non-base64 characters (including ANSI escape codes from interactive prompts)
+            $env:BW_SESSION = $sessionKey -replace '[^A-Za-z0-9+/=_-]', ''
             Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
         } else {
             Write-Host "[ERROR] Failed to unlock vault" -ForegroundColor Red
@@ -123,12 +124,12 @@ function Get-BitwardenSshKeys {
     #>
 
     Write-Host "Syncing Bitwarden vault..." -ForegroundColor Cyan
-    bw sync 2>&1 | Out-Null
+    bw sync --session $env:BW_SESSION 2>&1 | Out-Null
 
     Write-Host "Fetching items from Bitwarden..." -ForegroundColor Cyan
 
     # Force output to a single string to prevent array-parsing issues in PowerShell 5.1
-    $itemsRaw = bw list items | Out-String
+    $itemsRaw = bw list items --session $env:BW_SESSION | Out-String
 
     if ([string]::IsNullOrWhiteSpace($itemsRaw)) {
         Write-Host "Warning: Bitwarden returned no items." -ForegroundColor Yellow
