@@ -194,7 +194,9 @@ function Sync-SSH {
         $bwLookup = Get-BitwardenSshKeys
 
         # Get export private keys preference
+        $agentMode = git config sync-ssh.agent-mode
         $exportPrivPref = git config sync-ssh.export-private-keys
+        $exportPriv = ($agentMode -eq "disk") -or ($exportPrivPref -eq "yes")
 
         # Process Git Signing
         $gitSign = $bwLookup.Values | Where-Object { $_.name -eq "git-sign" } | Select-Object -First 1
@@ -202,7 +204,7 @@ function Sync-SSH {
             $signPub = Join-Path $config.KeysDir "git-sign.pub"
             $gitSign.publicKey.Trim() | Out-File -FilePath $signPub -Encoding utf8 -Force
 
-            if ($exportPrivPref -eq "yes" -and $gitSign.privateKey) {
+            if ($exportPriv -and $gitSign.privateKey) {
                 $signPriv = Join-Path $config.KeysDir "git-sign"
                 $gitSign.privateKey.Trim() | Out-File -FilePath $signPriv -Encoding utf8 -Force
             }
@@ -236,7 +238,7 @@ function Sync-SSH {
 
             $identityFile = $pubkeyFile
 
-            if ($exportPrivPref -eq "yes" -and $item.privateKey) {
+            if ($exportPriv -and $item.privateKey) {
                 $privkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower())"
                 $item.privateKey.Trim() | Out-File -FilePath $privkeyFile -Encoding utf8 -Force
                 $identityFile = $privkeyFile

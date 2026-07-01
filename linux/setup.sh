@@ -42,31 +42,37 @@ echo
 GIT_SIGN=$(prompt_option "1. Would you like to enable Git Commit Signing via SSH?" "skip")
 KEEP_ALIVE=$(prompt_option "2. Would you like to enable SSH KeepAlive?" "skip")
 
-WSL_BRIDGE="skip"
-BW_AGENT_LINUX="skip"
-
+echo -e "\n3. SSH Agent Mode:"
 if [ "$IS_WSL" = true ]; then
-    WSL_BRIDGE=$(prompt_option "3. Would you like to set up the WSL SSH Agent Bridge (to Windows)?" "yes")
+    echo "   [1] Bitwarden SSH Agent via Windows pipe bridge (recommended)"
+    echo "       Note: Requires socat + npiperelay.exe"
 else
-    BW_AGENT_LINUX=$(prompt_option "3. Would you like to use the Bitwarden SSH Agent (Native Linux)?" "yes")
+    echo "   [1] Bitwarden SSH Agent (recommended)"
 fi
+echo "   [2] Sync private keys to disk (insecure)"
 
-EXPORT_PRIV="skip"
-if [ "$WSL_BRIDGE" != "yes" ] && [ "$BW_AGENT_LINUX" != "yes" ]; then
-    EXPORT_PRIV=$(prompt_option "4. Would you like to export private keys to disk (Insecure headless mode)?" "skip")
-fi
+while true; do
+    read -p "   Select Mode (1/2) [1]: " AGENT_MODE_INPUT
+    [ -z "$AGENT_MODE_INPUT" ] && AGENT_MODE_INPUT="1"
+    
+    if [ "$AGENT_MODE_INPUT" = "1" ]; then
+        AGENT_MODE="bitwarden"
+        break
+    elif [ "$AGENT_MODE_INPUT" = "2" ]; then
+        AGENT_MODE="disk"
+        echo -e "\n   \e[33mWARNING: Mode 2 exports your private SSH keys to disk in plain text.\e[0m"
+        break
+    else
+        echo "   Invalid option. Please enter 1 or 2." >&2
+    fi
+done
 
 echo -e "\n========================================"
 echo "Configuration Summary:"
 echo "  OS:               $OS_NAME"
 echo "  Git SSH Signing:  $GIT_SIGN"
 echo "  SSH KeepAlive:    $KEEP_ALIVE"
-if [ "$IS_WSL" = true ]; then
-    echo "  WSL Agent Bridge: $WSL_BRIDGE"
-else
-    echo "  BW SSH Agent:     $BW_AGENT_LINUX"
-fi
-echo "  Export Private Keys: $EXPORT_PRIV"
+echo "  Agent Mode:       $AGENT_MODE"
 echo "========================================"
 echo
 
@@ -82,12 +88,7 @@ fi
 # Persist preferences
 git config --global sync-ssh.commit-signing "$GIT_SIGN"
 git config --global sync-ssh.keep-alive "$KEEP_ALIVE"
-if [ "$IS_WSL" = true ]; then
-    git config --global sync-ssh.wsl-bridge "$WSL_BRIDGE"
-else
-    git config --global sync-ssh.bw-agent-linux "$BW_AGENT_LINUX"
-fi
-git config --global sync-ssh.export-private-keys "$EXPORT_PRIV"
+git config --global sync-ssh.agent-mode "$AGENT_MODE"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -100,8 +101,8 @@ if [ "$IS_WSL" = true ]; then
 
     cat <<EOF >> "$CONFIG_FILE"
 # WSL-specific: Bridge Bitwarden SSH agent to native Linux ssh
-WSL_BRIDGE_PREF=\$(git config sync-ssh.wsl-bridge)
-if [ "\$WSL_BRIDGE_PREF" = "yes" ] || [ -z "\$WSL_BRIDGE_PREF" ]; then
+AGENT_MODE=\$(git config sync-ssh.agent-mode)
+if [ "\$AGENT_MODE" = "bitwarden" ] || [ -z "\$AGENT_MODE" ]; then
     export SSH_AUTH_SOCK="\$HOME/.bitwarden-ssh-agent.sock"
 
     # Use pgrep to check if socat is already running instead of probing with ssh-add,
@@ -113,6 +114,9 @@ if [ "\$WSL_BRIDGE_PREF" = "yes" ] || [ -z "\$WSL_BRIDGE_PREF" ]; then
             EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
             &>/dev/null &)
     fi
+
+    # Ensure native Linux ssh is preferred over Windows ssh.exe (WSL interop PATH ordering)
+    export PATH="/usr/bin:\$PATH"
 fi
 
 sync-ssh() {
@@ -145,8 +149,8 @@ else
 
     cat <<EOF >> "$CONFIG_FILE"
 # Linux-specific: Use Bitwarden SSH Agent if enabled
-BW_AGENT_PREF=\$(git config sync-ssh.bw-agent-linux)
-if [ "\$BW_AGENT_PREF" = "yes" ]; then
+AGENT_MODE=\$(git config sync-ssh.agent-mode)
+if [ "\$AGENT_MODE" = "bitwarden" ] || [ -z "\$AGENT_MODE" ]; then
     # Default Bitwarden path. Adjust if using Snap or custom location.
     if [ -S "$DEFAULT_BW_SOCK" ]; then
         export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"

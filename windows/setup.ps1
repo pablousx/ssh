@@ -69,11 +69,26 @@ Write-Host "Detected OS: Windows" -ForegroundColor Cyan
 
 $gitSign = Prompt-Option "1. Would you like to enable Git Commit Signing via SSH?" "skip"
 $keepAlive = Prompt-Option "2. Would you like to enable SSH KeepAlive?" "skip"
-$bwAgent = Prompt-Option "3. Are you using Bitwarden Desktop (with SSH Agent)?" "yes"
 
-$exportPriv = "skip"
-if ($bwAgent -ne "yes") {
-    $exportPriv = Prompt-Option "4. Would you like to export private keys to disk (Insecure headless mode)?" "skip"
+Write-Host "`n3. SSH Agent Mode:" -ForegroundColor Cyan
+Write-Host "   [1] Bitwarden SSH Agent (recommended)" -ForegroundColor Cyan
+Write-Host "   [2] Sync private keys to disk (insecure)" -ForegroundColor Cyan
+
+while ($true) {
+    $agentModeInput = Read-Host "   Select Mode (1/2) [default: 1]"
+    $agentModeInput = $agentModeInput.Trim()
+    if ([string]::IsNullOrWhiteSpace($agentModeInput)) { $agentModeInput = "1" }
+
+    if ($agentModeInput -eq "1") {
+        $agentMode = "bitwarden"
+        break
+    } elseif ($agentModeInput -eq "2") {
+        $agentMode = "disk"
+        Write-Host "`n   WARNING: Mode 2 exports your private SSH keys to disk in plain text." -ForegroundColor Yellow
+        break
+    } else {
+        Write-Host "   Invalid option. Please enter 1 or 2." -ForegroundColor Red
+    }
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan
@@ -81,8 +96,7 @@ Write-Host "Configuration Summary:" -ForegroundColor Cyan
 Write-Host "  OS:               Windows" -ForegroundColor Cyan
 Write-Host "  Git SSH Signing:  $gitSign" -ForegroundColor Cyan
 Write-Host "  SSH KeepAlive:    $keepAlive" -ForegroundColor Cyan
-Write-Host "  BW Desktop Agent: $bwAgent" -ForegroundColor Cyan
-Write-Host "  Export Private Keys: $exportPriv" -ForegroundColor Cyan
+Write-Host "  Agent Mode:       $agentMode" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 $confirm = Read-Host "`nProceed with these settings? (y/n) [default: y]"
@@ -97,7 +111,7 @@ if ($confirm -ne "y" -and $confirm -ne "yes") {
 # Persist preferences
 git config --global sync-ssh.commit-signing $gitSign
 git config --global sync-ssh.keep-alive $keepAlive
-git config --global sync-ssh.export-private-keys $exportPriv
+git config --global sync-ssh.agent-mode $agentMode
 
 # Add to PowerShell profile
 Add-ToProfile

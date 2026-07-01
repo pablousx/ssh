@@ -133,7 +133,12 @@ sync_ssh() {
         org: .organizationId
     }]')
 
-    EXPORT_PRIV_PREF=$(git config sync-ssh.export-private-keys)
+    AGENT_MODE=$(git config sync-ssh.agent-mode)
+    EXPORT_PRIV_PREF=$(git config sync-ssh.export-private-keys)  # legacy fallback
+    EXPORT_PRIV="no"
+    if [ "$AGENT_MODE" = "disk" ] || [ "$EXPORT_PRIV_PREF" = "yes" ]; then
+        EXPORT_PRIV="yes"
+    fi
 
     # Process git-sign separately
     GIT_SIGN=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
@@ -142,7 +147,7 @@ sync_ssh() {
         echo "$GIT_SIGN" | jq -r '.pubkey' > "$SIGN_PUB"
         chmod 600 "$SIGN_PUB"
 
-        if [ "$EXPORT_PRIV_PREF" = "yes" ]; then
+        if [ "$EXPORT_PRIV" = "yes" ]; then
             SIGN_PRIV_VAL=$(echo "$GIT_SIGN" | jq -r '.privkey // empty')
             if [ -n "$SIGN_PRIV_VAL" ] && [ "$SIGN_PRIV_VAL" != "null" ]; then
                 SIGN_PRIV="$KEYS_DIR/git-sign"
@@ -184,7 +189,7 @@ sync_ssh() {
 
         IDENTITY_FILE="$PUB_FILE"
 
-        if [ "$EXPORT_PRIV_PREF" = "yes" ] && [ -n "$PRIV" ] && [ "$PRIV" != "null" ]; then
+        if [ "$EXPORT_PRIV" = "yes" ] && [ -n "$PRIV" ] && [ "$PRIV" != "null" ]; then
             PRIV_FILE="$KEYS_DIR/$SAFE_NAME"
             echo "$PRIV" > "$PRIV_FILE" && chmod 600 "$PRIV_FILE"
             IDENTITY_FILE="$PRIV_FILE"
