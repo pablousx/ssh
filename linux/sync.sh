@@ -11,19 +11,19 @@ DOT_SSH_CONFIG="$HOME/.ssh/config"
 # =========== Functions ===========
 
 log_info() {
-    echo -e "\e[36m$1\e[0m" >&2
+    printf "\033[36m%s\033[0m\n" "$1" >&2
 }
 
 log_success() {
-    echo -e "\e[32m$1\e[0m" >&2
+    printf "\033[32m%s\033[0m\n" "$1" >&2
 }
 
 log_warn() {
-    echo -e "\e[33m$1\e[0m" >&2
+    printf "\033[33m%s\033[0m\n" "$1" >&2
 }
 
 log_error() {
-    echo -e "\e[31m$1\e[0m" >&2
+    printf "\033[31m%s\033[0m\n" "$1" >&2
 }
 
 ensure_dependencies() {
@@ -168,7 +168,7 @@ sync_ssh() {
     # Process items
     while read -r ITEM; do
         NAME=$(echo "$ITEM" | jq -r '.name')
-        [ "${NAME,,}" == "git-sign" ] && continue
+        [ "$(echo "$NAME" | tr '[:upper:]' '[:lower:]')" == "git-sign" ] && continue
 
         HOST=$(echo "$ITEM" | jq -r '.hostname // empty')
         USER=$(echo "$ITEM" | jq -r '.user // empty')
