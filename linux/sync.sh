@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # =========== Constants ===========
 SYNC_START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
@@ -27,13 +27,13 @@ log_error() {
 }
 
 ensure_dependencies() {
-    if ! command -v bw &> /dev/null; then
+    if ! command -v bw > /dev/null 2>&1; then
         log_error "Bitwarden CLI (bw) not found."
         log_warn "Please install it: https://bitwarden.com/help/cli/"
         exit 1
     fi
 
-    if ! command -v jq &> /dev/null; then
+    if ! command -v jq > /dev/null 2>&1; then
         log_error "jq not found."
         log_warn "Please install it (e.g., sudo apt install jq)"
         exit 1
@@ -48,13 +48,13 @@ initialize_ssh_config() {
 
     if [ ! -f "$SSH_CONFIG_FILE" ]; then
         log_info "Creating default config at $SSH_CONFIG_FILE"
-        echo -e "Host *\n  Port 22\n  AddKeysToAgent yes\n  ForwardAgent no\n" > "$SSH_CONFIG_FILE"
+        printf "Host *\n  Port 22\n  AddKeysToAgent yes\n  ForwardAgent no\n\n" > "$SSH_CONFIG_FILE"
     fi
 
     # Ensure markers exist
     if ! grep -qF "$SYNC_START_MARKER" "$SSH_CONFIG_FILE"; then
         log_info "Adding managed section markers to $SSH_CONFIG_FILE"
-        echo -e "\n$SYNC_START_MARKER\n# This section is automatically generated. Manual changes will be lost.\n$SYNC_END_MARKER" >> "$SSH_CONFIG_FILE"
+        printf "\n%s\n# This section is automatically generated. Manual changes will be lost.\n%s\n" "$SYNC_START_MARKER" "$SYNC_END_MARKER" >> "$SSH_CONFIG_FILE"
     fi
 
     # Link ~/.ssh/config to our config if they are different files
@@ -90,7 +90,7 @@ unlock_vault() {
         RAW_UNLOCK=$(bw unlock --raw)
 
         if [ $? -eq 0 ]; then
-            BW_SESSION=$(echo "$RAW_UNLOCK" | grep -oE '[A-Za-z0-9+/=_-]{80,}' | tail -n 1)
+            BW_SESSION=$(printf '%s\n' "$RAW_UNLOCK" | grep -oE '[A-Za-z0-9+/=_-]{80,}' | tail -n 1)
             if [ -n "$BW_SESSION" ]; then
                 export BW_SESSION
                 log_success "[OK] Vault unlocked successfully!"
@@ -141,17 +141,17 @@ sync_ssh() {
     fi
 
     # Process git-sign separately
-    GIT_SIGN=$(echo "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
-    if [ -n "$GIT_SIGN" ] && [ "$(echo "$GIT_SIGN" | jq -r '.pubkey')" != "null" ]; then
+    GIT_SIGN=$(printf '%s\n' "$BW_DATA" | jq -c '.[] | select(.name | ascii_downcase == "git-sign")' | head -n 1)
+    if [ -n "$GIT_SIGN" ] && [ "$(printf '%s\n' "$GIT_SIGN" | jq -r '.pubkey')" != "null" ]; then
         SIGN_PUB="$KEYS_DIR/git-sign.pub"
-        echo "$GIT_SIGN" | jq -r '.pubkey' > "$SIGN_PUB"
+        printf '%s\n' "$GIT_SIGN" | jq -r '.pubkey' > "$SIGN_PUB"
         chmod 600 "$SIGN_PUB"
 
         if [ "$EXPORT_PRIV" = "yes" ]; then
-            SIGN_PRIV_VAL=$(echo "$GIT_SIGN" | jq -r '.privkey // empty')
+            SIGN_PRIV_VAL=$(printf '%s\n' "$GIT_SIGN" | jq -r '.privkey // empty')
             if [ -n "$SIGN_PRIV_VAL" ] && [ "$SIGN_PRIV_VAL" != "null" ]; then
                 SIGN_PRIV="$KEYS_DIR/git-sign"
-                echo "$SIGN_PRIV_VAL" > "$SIGN_PRIV"
+                printf '%s\n' "$SIGN_PRIV_VAL" > "$SIGN_PRIV"
                 chmod 600 "$SIGN_PRIV"
             fi
         fi
@@ -162,19 +162,21 @@ sync_ssh() {
         log_success "Synced Git signing key: git-sign"
     fi
 
-    NEW_MANAGED_CONTENT=""
+    MANAGED_FILE=$(mktemp)
     PROCESSED_COUNT=0
 
     # Process items
+    TMP_ITEMS=$(mktemp)
+    printf '%s\n' "$BW_DATA" | jq -c '.[]' > "$TMP_ITEMS"
     while read -r ITEM; do
-        NAME=$(echo "$ITEM" | jq -r '.name')
-        [ "$(echo "$NAME" | tr '[:upper:]' '[:lower:]')" == "git-sign" ] && continue
+        NAME=$(printf '%s\n' "$ITEM" | jq -r '.name')
+        [ "$(printf '%s\n' "$NAME" | tr '[:upper:]' '[:lower:]')" = "git-sign" ] && continue
 
-        HOST=$(echo "$ITEM" | jq -r '.hostname // empty')
-        USER=$(echo "$ITEM" | jq -r '.user // empty')
-        PUB=$(echo "$ITEM" | jq -r '.pubkey // empty')
-        PRIV=$(echo "$ITEM" | jq -r '.privkey // empty')
-        ORG=$(echo "$ITEM" | jq -r '.org // empty')
+        HOST=$(printf '%s\n' "$ITEM" | jq -r '.hostname // empty')
+        USER=$(printf '%s\n' "$ITEM" | jq -r '.user // empty')
+        PUB=$(printf '%s\n' "$ITEM" | jq -r '.pubkey // empty')
+        PRIV=$(printf '%s\n' "$ITEM" | jq -r '.privkey // empty')
+        ORG=$(printf '%s\n' "$ITEM" | jq -r '.org // empty')
 
         if [ -z "$PUB" ] || [ -z "$HOST" ]; then
             log_warn "Skipping '$NAME': Missing metadata (HostName or Public Key)"
@@ -183,39 +185,38 @@ sync_ssh() {
 
         [ -n "$ORG" ] && [ "$ORG" != "null" ] && log_warn "Notice: '$NAME' is an Org key."
 
-        SAFE_NAME=$(echo "$NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
+        SAFE_NAME=$(printf '%s\n' "$NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/^-//;s/-$//')
         PUB_FILE="$KEYS_DIR/$SAFE_NAME.pub"
-        echo "$PUB" > "$PUB_FILE" && chmod 600 "$PUB_FILE"
+        printf '%s\n' "$PUB" > "$PUB_FILE" && chmod 600 "$PUB_FILE"
 
         IDENTITY_FILE="$PUB_FILE"
 
         if [ "$EXPORT_PRIV" = "yes" ] && [ -n "$PRIV" ] && [ "$PRIV" != "null" ]; then
             PRIV_FILE="$KEYS_DIR/$SAFE_NAME"
-            echo "$PRIV" > "$PRIV_FILE" && chmod 600 "$PRIV_FILE"
+            printf '%s\n' "$PRIV" > "$PRIV_FILE" && chmod 600 "$PRIV_FILE"
             IDENTITY_FILE="$PRIV_FILE"
         fi
 
-        ENTRY="\nHost $SAFE_NAME\n  HostName $HOST\n"
-        [ -n "$USER" ] && ENTRY+="  User $USER\n"
-        ENTRY+="  IdentityFile $IDENTITY_FILE\n  IdentitiesOnly yes\n"
+        printf "\nHost %s\n  HostName %s\n" "$SAFE_NAME" "$HOST" >> "$MANAGED_FILE"
+        if [ -n "$USER" ] && [ "$USER" != "null" ]; then
+            printf "  User %s\n" "$USER" >> "$MANAGED_FILE"
+        fi
+        printf "  IdentityFile %s\n  IdentitiesOnly yes\n" "$IDENTITY_FILE" >> "$MANAGED_FILE"
 
-        NEW_MANAGED_CONTENT+="$ENTRY"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-    done < <(echo "$BW_DATA" | jq -c '.[]')
-
+    done < "$TMP_ITEMS"
+    rm -f "$TMP_ITEMS"
 
     # Apply SSH KeepAlive preference
     KEEP_ALIVE_PREF=$(git config sync-ssh.keep-alive)
     if [ "$KEEP_ALIVE_PREF" = "yes" ]; then
-        NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 60\n  ServerAliveCountMax 3\n"
+        printf "\nHost *\n  ServerAliveInterval 60\n  ServerAliveCountMax 3\n" >> "$MANAGED_FILE"
     elif [ "$KEEP_ALIVE_PREF" = "no" ]; then
-        NEW_MANAGED_CONTENT+="\nHost *\n  ServerAliveInterval 0\n"
+        printf "\nHost *\n  ServerAliveInterval 0\n" >> "$MANAGED_FILE"
     fi
 
     # Update config file using awk for reliable block replacement
     TEMP_CONFIG=$(mktemp)
-    MANAGED_FILE=$(mktemp)
-    echo -e "$NEW_MANAGED_CONTENT" > "$MANAGED_FILE"
 
     awk -v start="$SYNC_START_MARKER" -v end="$SYNC_END_MARKER" -v managed="$MANAGED_FILE" '
     BEGIN { p=1 }

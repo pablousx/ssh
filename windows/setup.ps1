@@ -6,11 +6,16 @@ function Add-ToProfile {
     Add sync.ps1 to PowerShell profile if not already present
     #>
     param(
-        [string]$ScriptPath = "$PSScriptRoot\sync.ps1"
+        [string]$ScriptPath = ""
     )
 
+    if ([string]::IsNullOrEmpty($ScriptPath)) {
+        $ScriptPath = Join-Path $PSScriptRoot "sync.ps1"
+    }
+
     $profilePath = $PROFILE
-    $sourceLine = ". $ScriptPath"
+    # Wrap path in quotes to handle spaces in usernames/directories
+    $sourceLine = ". `"$ScriptPath`""
 
     # Create profile directory if it doesn't exist
     $profileDir = Split-Path $profilePath -Parent

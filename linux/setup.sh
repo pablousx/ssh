@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Detect environment
 IS_WSL=false
@@ -9,8 +9,13 @@ if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$WSL_INTEROP" ] || [ -f /proc/version ] &&
 fi
 
 # Paths
-REPO_ROOT=$(realpath "$(dirname "$0")/..")
-SYNC_SH="$REPO_ROOT/linux/sync.sh"
+SCRIPT_DIR=$(realpath "$(dirname "$0")")
+if [ "$SCRIPT_DIR" = "$HOME/.local/share/sync-ssh" ]; then
+    SYNC_SH="$SCRIPT_DIR/sync.sh"
+else
+    REPO_ROOT=$(realpath "$SCRIPT_DIR/..")
+    SYNC_SH="$REPO_ROOT/linux/sync.sh"
+fi
 CONFIG_FILE="$HOME/.ssh/sync-ssh-env.sh"
 DEFAULT_BW_SOCK="$HOME/.bitwarden-ssh-agent.sock"
 
@@ -20,7 +25,8 @@ prompt_option() {
     local user_input
 
     while true; do
-        read -p "$prompt_text (yes [y], no [n], skip [s]) [$default_val]: " user_input
+        printf "%s (yes [y], no [n], skip [s]) [%s]: " "$prompt_text" "$default_val"
+        read -r user_input
         user_input=$(echo "$user_input" | tr '[:upper:]' '[:lower:]')
         [ -z "$user_input" ] && user_input="$default_val"
 
@@ -42,7 +48,7 @@ echo
 GIT_SIGN=$(prompt_option "1. Would you like to enable Git Commit Signing via SSH?" "skip")
 KEEP_ALIVE=$(prompt_option "2. Would you like to enable SSH KeepAlive?" "skip")
 
-echo -e "\n3. SSH Agent Mode:"
+printf "\n3. SSH Agent Mode:\n"
 if [ "$IS_WSL" = true ]; then
     echo "   [1] Bitwarden SSH Agent via Windows pipe bridge (recommended)"
     echo "       Note: Requires socat + npiperelay.exe"
@@ -52,7 +58,8 @@ fi
 echo "   [2] Sync private keys to disk (insecure)"
 
 while true; do
-    read -p "   Select Mode (1/2) [1]: " AGENT_MODE_INPUT
+    printf "   Select Mode (1/2) [1]: "
+    read -r AGENT_MODE_INPUT
     [ -z "$AGENT_MODE_INPUT" ] && AGENT_MODE_INPUT="1"
     
     if [ "$AGENT_MODE_INPUT" = "1" ]; then
@@ -60,14 +67,14 @@ while true; do
         break
     elif [ "$AGENT_MODE_INPUT" = "2" ]; then
         AGENT_MODE="disk"
-        echo -e "\n   \e[33mWARNING: Mode 2 exports your private SSH keys to disk in plain text.\e[0m"
+        printf "\n   \033[33mWARNING: Mode 2 exports your private SSH keys to disk in plain text.\033[0m\n"
         break
     else
         echo "   Invalid option. Please enter 1 or 2." >&2
     fi
 done
 
-echo -e "\n========================================"
+printf "\n========================================\n"
 echo "Configuration Summary:"
 echo "  OS:               $OS_NAME"
 echo "  Git SSH Signing:  $GIT_SIGN"
@@ -76,7 +83,8 @@ echo "  Agent Mode:       $AGENT_MODE"
 echo "========================================"
 echo
 
-read -p "Proceed with these settings? (y/n) [y]: " CONFIRM
+printf "Proceed with these settings? (y/n) [y]: "
+read -r CONFIRM
 CONFIRM=$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')
 [ -z "$CONFIRM" ] && CONFIRM="y"
 
@@ -112,7 +120,7 @@ if [ "\$AGENT_MODE" = "bitwarden" ] || [ -z "\$AGENT_MODE" ]; then
         rm -f "\$SSH_AUTH_SOCK"
         (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \\
             EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
-            &>/dev/null &)
+            >/dev/null 2>&1 &)
     fi
 
     # Ensure native Linux ssh is preferred over Windows ssh.exe (WSL interop PATH ordering)
@@ -124,7 +132,7 @@ sync-ssh() {
         echo "Unlocking Bitwarden Vault..."
         export BW_SESSION=\$(bw unlock --raw | grep -oE '[A-Za-z0-9+/=_-]{80,}' | tail -n 1)
     fi
-    bash "$SYNC_SH"
+    sh "$SYNC_SH"
 }
 
 # Helper to forcefully restart the SSH bridge if the connection ever dies
@@ -137,7 +145,7 @@ reset-ssh-agent() {
 
     (setsid socat UNIX-LISTEN:"\$SSH_AUTH_SOCK",fork \\
         EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \\
-        &>/dev/null &)
+        >/dev/null 2>&1 &)
 
     echo "Bridge restarted. Testing connection..."
     sleep 1
@@ -166,20 +174,43 @@ sync-ssh() {
         echo "Unlocking Bitwarden Vault..."
         export BW_SESSION=\$(bw unlock --raw)
     fi
-    bash "$SYNC_SH"
+    sh "$SYNC_SH"
 }
 EOF
 fi
 
 echo "Created $CONFIG_FILE"
-echo "Please add the following line to your .zshrc or .bashrc:"
-echo "source $CONFIG_FILE"
+
+# Auto-append to shell profile
+APPENDED=false
+SOURCE_CMD="source $CONFIG_FILE"
+
+for PROFILE in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    if [ -f "$PROFILE" ]; then
+        if ! grep -qF "$SOURCE_CMD" "$PROFILE"; then
+            echo "" >> "$PROFILE"
+            echo "# Added by Bitwarden SSH Sync setup" >> "$PROFILE"
+            echo "$SOURCE_CMD" >> "$PROFILE"
+            echo "Auto-added '$SOURCE_CMD' to $PROFILE"
+        else
+            echo "Profile $PROFILE already configured."
+        fi
+        APPENDED=true
+    fi
+done
+
+if [ "$APPENDED" = false ]; then
+    echo "Could not find .zshrc or .bashrc."
+    echo "Please manually add the following line to your shell profile:"
+    echo "$SOURCE_CMD"
+fi
 
 # Finally ask if user wants to sync right away
 echo
-read -p "Do you want to sync SSH keys right away? (y/n) [n]: " RUN_SYNC
+printf "Do you want to sync SSH keys right away? (y/n) [n]: "
+read -r RUN_SYNC
 RUN_SYNC=$(echo "$RUN_SYNC" | tr '[:upper:]' '[:lower:]')
 if [ "$RUN_SYNC" = "y" ] || [ "$RUN_SYNC" = "yes" ]; then
     echo "Running sync..."
-    bash "$SYNC_SH"
+    sh "$SYNC_SH"
 fi
