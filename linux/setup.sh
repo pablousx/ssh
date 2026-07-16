@@ -61,7 +61,7 @@ while true; do
     printf "   Select Mode (1/2) [1]: "
     read -r AGENT_MODE_INPUT
     [ -z "$AGENT_MODE_INPUT" ] && AGENT_MODE_INPUT="1"
-    
+
     if [ "$AGENT_MODE_INPUT" = "1" ]; then
         AGENT_MODE="bitwarden"
         break
@@ -214,3 +214,11 @@ if [ "$RUN_SYNC" = "y" ] || [ "$RUN_SYNC" = "yes" ]; then
     echo "Running sync..."
     sh "$SYNC_SH"
 fi
+
+echo
+echo "========================================"
+echo "  Setup Complete!"
+echo "  Restart your shell or run: source $CONFIG_FILE"
+echo "  Then you can sync your ssh keys anytime by running:"
+echo "    sync-ssh"
+echo "========================================"

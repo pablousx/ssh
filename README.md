@@ -85,6 +85,11 @@ curl -fsSL https://raw.githubusercontent.com/pablousx/ssh/main/install.sh | sh
 
 The installer will download the scripts, run the interactive setup, and automatically configure your shell profile (`.zshrc` or `.bashrc`).
 
+> **💡 Post-Install**: To sync immediately, restart your shell or run `source ~/.ssh/sync-ssh-env.sh`, then run:
+> ```bash
+> sync-ssh
+> ```
+
 ---
 
 ### 💻 Windows Setup (Native)
@@ -99,6 +104,11 @@ The installer will download the scripts, run the interactive setup, and automati
 
 > **Note**: If your Execution Policy is `Restricted`, you will need to allow scripts first:
 > `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+> **💡 Post-Install**: To sync immediately, restart PowerShell or run `. $PROFILE`, then run:
+> ```powershell
+> Sync-SSH
+> ```
 
 ---
 

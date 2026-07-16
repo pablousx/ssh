@@ -132,3 +132,11 @@ if ($runSync -eq "y" -or $runSync -eq "yes") {
     Write-Host "Running sync..." -ForegroundColor Cyan
     & "$PSScriptRoot\sync.ps1"
 }
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  Setup Complete!" -ForegroundColor Green
+Write-Host "  Restart PowerShell or run: . `$PROFILE" -ForegroundColor Cyan
+Write-Host "  Then you can sync your ssh keys anytime by running:" -ForegroundColor Cyan
+Write-Host "    Sync-SSH" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Cyan
