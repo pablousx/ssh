@@ -27,4 +27,4 @@ chmod +x "$INSTALL_DIR/setup.sh" "$INSTALL_DIR/sync.sh"
 
 # Run setup
 cd "$INSTALL_DIR"
-./setup.sh
+./setup.sh < /dev/tty

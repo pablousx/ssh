@@ -25,7 +25,7 @@ prompt_option() {
     local user_input
 
     while true; do
-        printf "%s (yes [y], no [n], skip [s]) [%s]: " "$prompt_text" "$default_val"
+        printf "%s (yes [y], no [n], skip [s]) [%s]: " "$prompt_text" "$default_val" >&2
         read -r user_input
         user_input=$(echo "$user_input" | tr '[:upper:]' '[:lower:]')
         [ -z "$user_input" ] && user_input="$default_val"

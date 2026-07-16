@@ -13,7 +13,7 @@ echo
 # Helper
 confirm() {
     printf "%s (y/n) [n]: " "$1"
-    read -r REPLY
+    read -r REPLY < /dev/tty
     REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]')
     [ "$REPLY" = "y" ] || [ "$REPLY" = "yes" ]
 }
