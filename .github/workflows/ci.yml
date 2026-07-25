@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install -y jq shellcheck
+      - name: Check POSIX and Bash syntax
+        run: |
+          dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
+          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
+      - name: Run ShellCheck
+        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
+      - name: Run Linux integration tests
+        run: tests/linux/run.sh
+
+  powershell:
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install test and analysis modules
+        shell: ${{ matrix.shell }}
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+      - name: Parse PowerShell scripts
+        shell: ${{ matrix.shell }}
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) {
+              $failed = $true
+              $errors | Write-Error
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Run PSScriptAnalyzer
+        shell: ${{ matrix.shell }}
+        run: |
+          $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          $issues | Format-Table
+          if ($issues) { exit 1 }
+      - name: Run PowerShell tests
+        shell: ${{ matrix.shell }}
+        run: |
+          $result = Invoke-Pester tests/powershell/Sync.Tests.ps1 -PassThru
+          if ($result.FailedCount -gt 0) { exit 1 }

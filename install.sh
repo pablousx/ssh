@@ -1,30 +1,80 @@
 #!/bin/sh
-set -e
+set -eu
 
-REPO_URL="https://raw.githubusercontent.com/pablousx/ssh/main"
-INSTALL_DIR="$HOME/.local/share/sync-ssh"
+VERSION="${SYNC_SSH_VERSION:-v1.0.0}"
+REPOSITORY="pablousx/ssh"
+INSTALL_PARENT="$HOME/.local/share"
+INSTALL_DIR="$INSTALL_PARENT/sync-ssh"
+STAGING_ROOT=""
+NEW_INSTALL=""
+BACKUP_DIR="$INSTALL_PARENT/.sync-ssh.previous"
 
-echo "Installing Bitwarden SSH Sync..."
+cleanup() {
+    [ -z "$STAGING_ROOT" ] || [ ! -d "$STAGING_ROOT" ] || rm -rf -- "$STAGING_ROOT"
+    [ -z "$NEW_INSTALL" ] || [ ! -d "$NEW_INSTALL" ] || rm -rf -- "$NEW_INSTALL"
+}
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
 
-# Check OS
-if [ "$(uname -s)" = "Windows_NT" ]; then
-    echo "This one-liner is for Linux/WSL. For Windows, please see the README."
+for command_name in curl tar sha256sum; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+        printf "Error: required command not found: %s\n" "$command_name" >&2
+        exit 1
+    }
+done
+
+case "$(uname -s)" in
+    Linux) ;;
+    *) printf "This installer supports Linux and WSL only.\n" >&2; exit 1 ;;
+esac
+
+archive_name="sync-ssh-$VERSION.tar.gz"
+release_url="https://github.com/$REPOSITORY/releases/download/$VERSION"
+STAGING_ROOT=$(mktemp -d)
+chmod 700 "$STAGING_ROOT"
+
+printf "Downloading Sync-SSH %s...\n" "$VERSION"
+curl -fsSL "$release_url/$archive_name" -o "$STAGING_ROOT/$archive_name"
+curl -fsSL "$release_url/$archive_name.sha256" -o "$STAGING_ROOT/$archive_name.sha256"
+(
+    cd "$STAGING_ROOT"
+    sha256sum -c "$archive_name.sha256"
+)
+
+tar -xzf "$STAGING_ROOT/$archive_name" -C "$STAGING_ROOT"
+[ -f "$STAGING_ROOT/sync-ssh/linux/setup.sh" ] &&
+    [ -f "$STAGING_ROOT/sync-ssh/linux/sync.sh" ] || {
+        printf "Release archive is missing Linux scripts.\n" >&2
+        exit 1
+    }
+
+mkdir -p "$INSTALL_PARENT"
+NEW_INSTALL="$INSTALL_PARENT/.sync-ssh.new.$$"
+mkdir "$NEW_INSTALL"
+cp "$STAGING_ROOT/sync-ssh/linux/setup.sh" "$NEW_INSTALL/setup.sh"
+cp "$STAGING_ROOT/sync-ssh/linux/sync.sh" "$NEW_INSTALL/sync.sh"
+printf '%s\n' "$VERSION" >"$NEW_INSTALL/VERSION"
+chmod 700 "$NEW_INSTALL"
+chmod 755 "$NEW_INSTALL/setup.sh" "$NEW_INSTALL/sync.sh"
+chmod 600 "$NEW_INSTALL/VERSION"
+
+[ ! -e "$BACKUP_DIR" ] || rm -rf -- "$BACKUP_DIR"
+if [ -d "$INSTALL_DIR" ]; then
+    mv "$INSTALL_DIR" "$BACKUP_DIR"
+fi
+if ! mv "$NEW_INSTALL" "$INSTALL_DIR"; then
+    [ ! -d "$BACKUP_DIR" ] || mv "$BACKUP_DIR" "$INSTALL_DIR"
+    printf "Unable to publish the new installation.\n" >&2
     exit 1
 fi
+NEW_INSTALL=""
 
-# Ensure curl is installed
-if ! command -v curl > /dev/null 2>&1; then
-    echo "Error: curl is required to install."
+if ! "$INSTALL_DIR/setup.sh" </dev/tty; then
+    rm -rf -- "$INSTALL_DIR"
+    [ ! -d "$BACKUP_DIR" ] || mv "$BACKUP_DIR" "$INSTALL_DIR"
+    printf "Setup failed; the previous installation was restored.\n" >&2
     exit 1
 fi
+[ ! -d "$BACKUP_DIR" ] || rm -rf -- "$BACKUP_DIR"
 
-mkdir -p "$INSTALL_DIR"
-
-echo "Downloading scripts to $INSTALL_DIR..."
-curl -fsSL "$REPO_URL/linux/setup.sh" -o "$INSTALL_DIR/setup.sh"
-curl -fsSL "$REPO_URL/linux/sync.sh" -o "$INSTALL_DIR/sync.sh"
-chmod +x "$INSTALL_DIR/setup.sh" "$INSTALL_DIR/sync.sh"
-
-# Run setup
-cd "$INSTALL_DIR"
-./setup.sh < /dev/tty
+printf "Installed Sync-SSH %s.\n" "$VERSION"

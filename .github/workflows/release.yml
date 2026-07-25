@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify version
+        run: |
+          test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
+      - name: Build release archives
+        run: |
+          mkdir -p dist/sync-ssh
+          cp -R linux windows README.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sync-ssh/
+          tar -C dist -czf "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz" sync-ssh
+          (cd dist && zip -qr "sync-ssh-${GITHUB_REF_NAME}.zip" sync-ssh)
+          (cd dist && sha256sum "sync-ssh-${GITHUB_REF_NAME}.tar.gz" > "sync-ssh-${GITHUB_REF_NAME}.tar.gz.sha256")
+          (cd dist && sha256sum "sync-ssh-${GITHUB_REF_NAME}.zip" > "sync-ssh-${GITHUB_REF_NAME}.zip.sha256")
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --generate-notes \
+            "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz" \
+            "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz.sha256" \
+            "dist/sync-ssh-${GITHUB_REF_NAME}.zip" \
+            "dist/sync-ssh-${GITHUB_REF_NAME}.zip.sha256"

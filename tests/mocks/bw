@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    status)
+        printf '{"status":"%s"}\n' "${MOCK_BW_STATUS:-unlocked}"
+        ;;
+    unlock)
+        printf '%s\n' "${MOCK_BW_SESSION:-mock-session-token}"
+        ;;
+    sync)
+        [ "${MOCK_FAIL_SYNC:-0}" = "0" ] || exit 23
+        printf '{"success":true}\n'
+        ;;
+    list)
+        [ "${2:-}" = "items" ] || exit 2
+        [ "${MOCK_FAIL_LIST:-0}" = "0" ] || exit 24
+        if [ "${MOCK_INVALID_JSON:-0}" = "1" ]; then
+            printf 'not-json\n'
+            exit 0
+        fi
+
+        jq -n \
+            --arg pub "$MOCK_PUBLIC_KEY" \
+            --arg priv "${MOCK_PRIVATE_KEY:-}" \
+            --arg host "${MOCK_HOSTNAME:-example.com}" \
+            --arg user "${MOCK_USER:-ubuntu}" \
+            --arg mode "${MOCK_ITEMS_MODE:-normal}" '
+            def item($name; $hostname): {
+                id: $name,
+                type: 5,
+                name: $name,
+                fields: [
+                    {name: "HostName", value: $hostname},
+                    {name: "User", value: $user}
+                ],
+                sshKey: {publicKey: $pub, privateKey: $priv}
+            };
+            if $mode == "duplicate" then
+                [item("Production Server"; $host), item("Production@Server"; $host)]
+            elif $mode == "git-sign" then
+                [
+                    item("production"; $host),
+                    ({
+                        id: "git-sign",
+                        type: 5,
+                        name: "git-sign",
+                        fields: [{name: "Email", value: "developer@example.com"}],
+                        sshKey: {publicKey: $pub, privateKey: $priv}
+                    })
+                ]
+            else
+                [item("production"; $host)]
+            end
+        '
+        ;;
+    *)
+        printf 'Unsupported mock bw command: %s\n' "$*" >&2
+        exit 2
+        ;;
+esac

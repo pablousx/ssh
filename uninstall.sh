@@ -1,94 +1,154 @@
 #!/bin/sh
-set -e
+set -eu
 
-CONFIG_FILE="$HOME/.ssh/sync-ssh-env.sh"
+ENV_FILE="$HOME/.ssh/sync-ssh-env.sh"
 INSTALL_DIR="$HOME/.local/share/sync-ssh"
-KEYS_DIR="$HOME/.ssh/keys"
+MANAGED_ROOT="$HOME/.ssh/sync-ssh"
+MAIN_CONFIG="$HOME/.ssh/config"
+APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sync-ssh"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sync-ssh"
+GIT_STATE_DIR="$STATE_DIR/git"
+INCLUDE_LINE="Include ~/.ssh/sync-ssh/current/config"
+START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
+END_MARKER="# --- END SYNC-SSH MANAGED SECTION ---"
 
-echo "========================================"
-echo "  Sync-SSH Uninstaller"
-echo "========================================"
-echo
+if [ -L "$MAIN_CONFIG" ]; then
+    resolved_main=$(readlink -f -- "$MAIN_CONFIG") || {
+        printf "Unable to resolve SSH config symlink: %s\n" "$MAIN_CONFIG" >&2
+        exit 1
+    }
+    MAIN_CONFIG=$resolved_main
+fi
 
-# Helper
 confirm() {
     printf "%s (y/n) [n]: " "$1"
-    read -r REPLY < /dev/tty
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]')
-    [ "$REPLY" = "y" ] || [ "$REPLY" = "yes" ]
+    read -r reply </dev/tty
+    reply=$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')
+    [ "$reply" = "y" ] || [ "$reply" = "yes" ]
 }
 
-# 1. Remove source line from shell profiles
-echo "Removing shell profile entries..."
-for PROFILE in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
-    if [ -f "$PROFILE" ]; then
-        # Remove the comment line and the source line together (both added by setup)
-        if grep -qF "sync-ssh-env.sh" "$PROFILE"; then
-            # Use a temp file for portable in-place editing
-            TMPFILE=$(mktemp)
-            grep -v "# Added by Bitwarden SSH Sync setup" "$PROFILE" \
-                | grep -v "sync-ssh-env.sh" > "$TMPFILE"
-            mv "$TMPFILE" "$PROFILE"
-            echo "  Cleaned: $PROFILE"
+safe_replace() {
+    source_file=$1
+    generated_file=$2
+    chmod --reference="$source_file" "$generated_file" 2>/dev/null || chmod 600 "$generated_file"
+    mv "$generated_file" "$source_file"
+}
+
+restore_git_setting() {
+    slug=$1
+    state_path="$GIT_STATE_DIR/$slug"
+    [ -d "$state_path" ] || return 0
+    command -v git >/dev/null 2>&1 || {
+        printf "Git is unavailable; preserving state for manual restoration: %s\n" "$state_path" >&2
+        return 0
+    }
+    git_key=$(case "$slug" in
+        gpg-format) printf "gpg.format" ;;
+        user-signingkey) printf "user.signingkey" ;;
+        commit-gpgsign) printf "commit.gpgsign" ;;
+        allowed-signers-file) printf "gpg.ssh.allowedSignersFile" ;;
+    esac)
+    current=$(git config --global --get "$git_key" 2>/dev/null || true)
+    owned=$(cat "$state_path/owned")
+    if [ "$current" = "$owned" ]; then
+        if [ -f "$state_path/was-present" ]; then
+            git config --global "$git_key" "$(cat "$state_path/previous")"
+        else
+            git config --global --unset-all "$git_key" 2>/dev/null || true
         fi
+    else
+        printf "Preserving user-modified Git setting: %s\n" "$git_key"
+    fi
+    rm -rf -- "$state_path"
+}
+
+printf "========================================\n"
+printf "  Sync-SSH Uninstaller\n"
+printf "========================================\n"
+
+if [ -f "$STATE_DIR/bridge.pid" ]; then
+    bridge_pid=$(cat "$STATE_DIR/bridge.pid")
+    case "$bridge_pid" in
+        *[!0-9]*|"") ;;
+        *)
+            if ps -p "$bridge_pid" -o args= 2>/dev/null |
+                grep -F "socat UNIX-LISTEN:$HOME/.bitwarden-ssh-agent.sock" >/dev/null; then
+                kill "$bridge_pid" 2>/dev/null || true
+            fi
+            ;;
+    esac
+    rm -f "$STATE_DIR/bridge.pid" "$HOME/.bitwarden-ssh-agent.sock"
+fi
+
+printf "Removing shell profile entries...\n"
+for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    [ -f "$profile" ] || continue
+    temp_profile="${profile}.sync-ssh-uninstall.$$"
+    awk -v env_file="$ENV_FILE" '
+        $0 == "# Added by Bitwarden SSH Sync setup" { next }
+        $0 == ". \"$HOME/.ssh/sync-ssh-env.sh\"" { next }
+        $0 == "source " env_file { next }
+        { print }
+    ' "$profile" >"$temp_profile"
+    if ! cmp -s "$profile" "$temp_profile"; then
+        safe_replace "$profile" "$temp_profile"
+        printf "  Cleaned: %s\n" "$profile"
+    else
+        rm -f "$temp_profile"
     fi
 done
 
-# 2. Remove the env/config file
-if [ -f "$CONFIG_FILE" ]; then
-    rm -f "$CONFIG_FILE"
-    echo "Removed: $CONFIG_FILE"
+rm -f "$ENV_FILE"
+[ ! -d "$INSTALL_DIR" ] || rm -rf -- "$INSTALL_DIR"
+
+if confirm "Remove the generated SSH configuration and keys from $MANAGED_ROOT?"; then
+    [ ! -d "$MANAGED_ROOT" ] || rm -rf -- "$MANAGED_ROOT"
+    printf "Removed tool-owned SSH files.\n"
 fi
 
-# 3. Remove the install directory (one-liner install)
-if [ -d "$INSTALL_DIR" ]; then
-    rm -rf "$INSTALL_DIR"
-    echo "Removed: $INSTALL_DIR"
-fi
-
-# 4. Optionally remove synced public keys
-echo
-if confirm "Remove synced public keys from $KEYS_DIR?"; then
-    if [ -d "$KEYS_DIR" ]; then
-        rm -rf "$KEYS_DIR"
-        echo "Removed: $KEYS_DIR"
-    else
-        echo "  $KEYS_DIR not found, skipping."
+if confirm "Remove the sync-ssh Include line or legacy managed block from $MAIN_CONFIG?"; then
+    if [ -f "$MAIN_CONFIG" ]; then
+        start_count=$(grep -cF "$START_MARKER" "$MAIN_CONFIG" || true)
+        end_count=$(grep -cF "$END_MARKER" "$MAIN_CONFIG" || true)
+        if [ "$start_count" -ne "$end_count" ] || [ "$start_count" -gt 1 ]; then
+            printf "Malformed legacy markers found; refusing to edit %s.\n" "$MAIN_CONFIG" >&2
+        else
+            temp_config="${MAIN_CONFIG}.sync-ssh-uninstall.$$"
+            awk -v include="$INCLUDE_LINE" -v start="$START_MARKER" -v end="$END_MARKER" '
+                $0 == start { skip=1; next }
+                $0 == end && skip { skip=0; next }
+                $0 == include { next }
+                $0 == "# Added by Bitwarden SSH Sync" { next }
+                !skip { print }
+                END { if (skip) exit 42 }
+            ' "$MAIN_CONFIG" >"$temp_config" || {
+                rm -f "$temp_config"
+                printf "Unable to safely edit %s.\n" "$MAIN_CONFIG" >&2
+                exit 1
+            }
+            safe_replace "$MAIN_CONFIG" "$temp_config"
+            chmod 600 "$MAIN_CONFIG"
+        fi
     fi
 fi
 
-# 5. Optionally clean the managed block from ~/.ssh/config
-echo
-if confirm "Remove the managed SSH config block from ~/.ssh/config?"; then
-    SSH_CONFIG="$HOME/.ssh/config"
-    if [ -f "$SSH_CONFIG" ]; then
-        START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
-        END_MARKER="# --- END SYNC-SSH MANAGED SECTION ---"
-        TMPFILE=$(mktemp)
-        awk -v start="$START_MARKER" -v end="$END_MARKER" '
-            $0 == start { skip=1; next }
-            $0 == end   { skip=0; next }
-            !skip        { print }
-        ' "$SSH_CONFIG" > "$TMPFILE"
-        mv "$TMPFILE" "$SSH_CONFIG"
-        chmod 600 "$SSH_CONFIG"
-        echo "  Managed block removed from $SSH_CONFIG"
-    else
-        echo "  $HOME/.ssh/config not found, skipping."
-    fi
+if confirm "Restore Git settings previously changed by Sync-SSH?"; then
+    restore_git_setting allowed-signers-file
+    restore_git_setting commit-gpgsign
+    restore_git_setting user-signingkey
+    restore_git_setting gpg-format
 fi
 
-# 6. Optionally remove git config entries
-echo
-if confirm "Remove Sync-SSH git config entries (sync-ssh.* globals)?"; then
-    git config --global --unset sync-ssh.commit-signing 2>/dev/null || true
-    git config --global --unset sync-ssh.keep-alive     2>/dev/null || true
-    git config --global --unset sync-ssh.agent-mode     2>/dev/null || true
-    echo "  Git config entries removed."
+if command -v git >/dev/null 2>&1; then
+    git config --global --unset-all sync-ssh.commit-signing 2>/dev/null || true
+    git config --global --unset-all sync-ssh.keep-alive 2>/dev/null || true
+    git config --global --unset-all sync-ssh.agent-mode 2>/dev/null || true
+    git config --global --unset-all sync-ssh.export-private-keys 2>/dev/null || true
 fi
 
-echo
-echo "========================================"
-echo "  Sync-SSH has been uninstalled."
-echo "  Restart your shell to apply changes."
-echo "========================================"
+[ ! -d "$APP_CONFIG_DIR" ] || rm -rf -- "$APP_CONFIG_DIR"
+if [ -d "$STATE_DIR" ] && [ -z "$(find "$STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    rmdir "$STATE_DIR"
+fi
+
+printf "\nSync-SSH has been uninstalled. Restart your shell to remove loaded functions.\n"

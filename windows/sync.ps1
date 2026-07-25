@@ -1,297 +1,582 @@
-# =========== Constants ===========
-$SYNC_START_MARKER = "# --- START SYNC-SSH MANAGED SECTION ---"
-$SYNC_END_MARKER = "# --- END SYNC-SSH MANAGED SECTION ---"
+[CmdletBinding()]
+param(
+    [Alias("DryRun")][switch]$SyncSshDryRun,
+    [Alias("Version")][switch]$SyncSshVersion
+)
 
-# =========== SSH Config Sync Functions ===========
+$script:SyncStartMarker = "# --- START SYNC-SSH MANAGED SECTION ---"
+$script:SyncEndMarker = "# --- END SYNC-SSH MANAGED SECTION ---"
+$script:IncludeLine = "Include ~/.ssh/sync-ssh/current/config"
 
-function Initialize-SshConfig {
-    <#
-    .SYNOPSIS
-    Initialize SSH configuration directories and files
-    #>
+function Write-Utf8NoBom {
     param(
-        [string]$OutputDir = "$HOME\.ssh"
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
     )
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
 
-    $KeysDir = Join-Path $OutputDir "keys"
-    $SshConfig = Join-Path $OutputDir "config"
-
-    # Create necessary directories
-    if (-not (Test-Path "$HOME\.ssh")) {
-        New-Item -ItemType Directory -Path "$HOME\.ssh" -Force | Out-Null
+function Assert-LastExitCode {
+    param([Parameter(Mandatory = $true)][string]$Operation)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Operation failed with exit code $LASTEXITCODE."
     }
-    if (-not (Test-Path $KeysDir)) {
-        New-Item -ItemType Directory -Path $KeysDir -Force | Out-Null
-    }
+}
 
-    # Set strict permissions compatible with SSH
-    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    icacls "$HOME\.ssh" /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "${currentUser}:(OI)(CI)F" | Out-Null
-    icacls "$KeysDir" /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "${currentUser}:(OI)(CI)F" | Out-Null
+function Get-SyncPaths {
+    param([string]$OutputDir = "$HOME\.ssh")
 
-    # Unconditionally take ownership and reset all file permissions in the keys directory recursively
-    takeown /f "$KeysDir" /r /d y 2>$null | Out-Null
-    icacls "$KeysDir\*" /reset /t 2>$null | Out-Null
-
-    # Ensure the config file exists
-    if (-not (Test-Path $SshConfig)) {
-        New-Item -ItemType File -Path $SshConfig -Force | Out-Null
-        $defaultConfig = "Host *`n  Port 22`n  AddKeysToAgent yes`n  ForwardAgent no`n`n"
-        $defaultConfig | Out-File -FilePath $SshConfig -Encoding utf8
-    }
-    icacls "$SshConfig" /inheritance:r /grant "*S-1-5-18:F" /grant "*S-1-5-32-544:F" /grant "${currentUser}:F" | Out-Null
-
-    # Ensure managed markers exist
-    $configContent = Get-Content -Path $SshConfig -Raw -ErrorAction SilentlyContinue
-    if ([string]::IsNullOrEmpty($configContent) -or $configContent -notmatch [regex]::Escape($SYNC_START_MARKER)) {
-        Write-Host "Adding managed section markers to $SshConfig" -ForegroundColor Cyan
-        $markerBlock = "`n$SYNC_START_MARKER`n# This section is automatically generated. Manual changes will be lost.`n$SYNC_END_MARKER`n"
-        $markerBlock | Out-File -FilePath $SshConfig -Append -Encoding utf8
-    }
-
-    # Create hard link from .ssh/config to our config file
-    $linkPath = "$HOME\.ssh\config"
-    $shouldCreateLink = $true
-
-    if (Test-Path $linkPath) {
-        $item = Get-Item $linkPath
-        # Check if it's already a hardlink to the same file
-        if ($item.FullName -eq (Get-Item $SshConfig).FullName) {
-            $shouldCreateLink = $false
-        } else {
-            Remove-Item $linkPath -Force
-        }
-    }
-
-    if ($shouldCreateLink) {
-        New-Item -ItemType HardLink -Path $linkPath -Value $SshConfig -Force | Out-Null
-        Write-Host "Linked $linkPath -> $SshConfig" -ForegroundColor Gray
-    }
-
+    $managedRoot = Join-Path $OutputDir "sync-ssh"
+    $stateDir = Join-Path $env:LOCALAPPDATA "sync-ssh-state"
     return @{
-        KeysDir = $KeysDir
-        SshConfig = $SshConfig
+        OutputDir       = $OutputDir
+        MainConfig     = Join-Path $OutputDir "config"
+        ManagedRoot    = $managedRoot
+        CurrentDir     = Join-Path $managedRoot "current"
+        Preferences    = Join-Path (Join-Path $env:APPDATA "sync-ssh") "config.json"
+        StateDir       = $stateDir
+        GitStateDir    = Join-Path $stateDir "git"
+        LockFile       = Join-Path $stateDir "sync.lock"
     }
 }
 
-function Unlock-BitwardenVault {
-    <#
-    .SYNOPSIS
-    Check and unlock Bitwarden vault if needed
-    #>
+function Resolve-MainConfigPath {
+    param([hashtable]$Paths)
+    if (-not (Test-Path -LiteralPath $Paths.MainConfig)) { return }
+    $item = Get-Item -LiteralPath $Paths.MainConfig -Force
+    if ($item.LinkType -eq "SymbolicLink") {
+        $target = [string]$item.Target
+        if (-not [System.IO.Path]::IsPathRooted($target)) {
+            $target = Join-Path (Split-Path $item.FullName -Parent) $target
+        }
+        $target = [System.IO.Path]::GetFullPath($target)
+        if (-not (Test-Path -LiteralPath $target)) {
+            throw "SSH config symlink target does not exist: $target"
+        }
+        $Paths.MainConfig = $target
+    }
+}
 
-    $bwStatusJson = bw status | ConvertFrom-Json
-    $bwStatus = $bwStatusJson.status
+function Get-Preferences {
+    param([hashtable]$Paths)
 
-    if ($bwStatus -eq 'unauthenticated') {
-        Write-Host "[ERROR] Bitwarden is not logged in. Please run 'bw login' first." -ForegroundColor Red
-        throw "Bitwarden not logged in"
+    $preferences = [ordered]@{
+        commit_signing = "skip"
+        keep_alive     = "skip"
+        agent_mode     = "bitwarden"
     }
 
-    if ($bwStatus -eq 'locked' -or -not $env:BW_SESSION) {
-
-        Write-Host "Bitwarden Vault: $bwStatus" -ForegroundColor Yellow
-        Write-Host "Unlocking vault..."
-
-        $unlockOutput = bw unlock --raw | Out-String
-
-        if ($LASTEXITCODE -eq 0) {
-            if ($unlockOutput -match '([A-Za-z0-9+/=_-]{80,})') {
-                $env:BW_SESSION = $matches[1]
-                Write-Host "[OK] Vault unlocked successfully!" -ForegroundColor Green
-            } else {
-                Write-Host "[ERROR] Could not extract session key" -ForegroundColor Red
-                throw "Failed to extract session key"
+    if (Test-Path -LiteralPath $Paths.Preferences) {
+        try {
+            $saved = Get-Content -LiteralPath $Paths.Preferences -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            foreach ($name in @("commit_signing", "keep_alive", "agent_mode")) {
+                if ($null -ne $saved.$name -and -not [string]::IsNullOrWhiteSpace([string]$saved.$name)) {
+                    $preferences[$name] = [string]$saved.$name
+                }
             }
-        } else {
-            Write-Host "[ERROR] Failed to unlock vault" -ForegroundColor Red
-            throw "Failed to unlock Bitwarden vault"
+        } catch {
+            throw "Unable to read preferences from $($Paths.Preferences): $($_.Exception.Message)"
+        }
+    } elseif (Get-Command git -ErrorAction SilentlyContinue) {
+        $legacyMap = @{
+            commit_signing = "sync-ssh.commit-signing"
+            keep_alive     = "sync-ssh.keep-alive"
+            agent_mode     = "sync-ssh.agent-mode"
+        }
+        foreach ($name in $legacyMap.Keys) {
+            $legacy = & git config --global --get $legacyMap[$name] 2>$null
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($legacy)) {
+                $preferences[$name] = $legacy.Trim()
+            }
         }
     }
+
+    if ($preferences.commit_signing -notin @("yes", "no", "skip")) {
+        throw "Invalid commit_signing preference: $($preferences.commit_signing)"
+    }
+    if ($preferences.keep_alive -notin @("yes", "no", "skip")) {
+        throw "Invalid keep_alive preference: $($preferences.keep_alive)"
+    }
+    if ($preferences.agent_mode -notin @("bitwarden", "disk")) {
+        throw "Invalid agent_mode preference: $($preferences.agent_mode)"
+    }
+    return $preferences
 }
 
-function Ensure-BitwardenCli {
-    # Confirm Bitwarden CLI is available before continuing
-    if (-not (Get-Command bw -ErrorAction SilentlyContinue)) {
-        Write-Host "Bitwarden CLI (bw) not found." -ForegroundColor Red
-        Write-Host "Install using: winget install Bitwarden.CLI" -ForegroundColor Yellow
-        Write-Host "Or download a release from: https://github.com/bitwarden/clients/releases" -ForegroundColor Yellow
-        throw "Missing Bitwarden CLI"
+function Enter-SyncLock {
+    param([hashtable]$Paths)
+    [System.IO.Directory]::CreateDirectory($Paths.StateDir) | Out-Null
+    try {
+        return [System.IO.File]::Open(
+            $Paths.LockFile,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+    } catch [System.IO.IOException] {
+        throw "Another sync-ssh process is already running."
     }
 }
 
-function Get-BitwardenSshKeys {
-    <#
-    .SYNOPSIS
-    Retrieve SSH key metadata from Bitwarden
-    #>
+function Ensure-Command {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "Required command not found: $Name"
+    }
+}
+
+function Get-BitwardenItems {
+    $statusRaw = (& bw status | Out-String)
+    Assert-LastExitCode "Bitwarden status"
+    try {
+        $status = ($statusRaw | ConvertFrom-Json -ErrorAction Stop).status
+    } catch {
+        throw "Bitwarden returned an invalid status response."
+    }
+
+    if ($status -eq "unauthenticated") {
+        throw "Bitwarden is not logged in. Run 'bw login' first."
+    }
+    if ($status -eq "locked" -or [string]::IsNullOrWhiteSpace($env:BW_SESSION)) {
+        Write-Host "Unlocking Bitwarden vault..." -ForegroundColor Cyan
+        $session = (& bw unlock --raw | Out-String).Trim()
+        Assert-LastExitCode "Bitwarden unlock"
+        if ([string]::IsNullOrWhiteSpace($session)) {
+            throw "Bitwarden returned an empty session token."
+        }
+        $env:BW_SESSION = $session
+    }
 
     Write-Host "Syncing Bitwarden vault..." -ForegroundColor Cyan
-    bw sync 2>&1 | Out-Null
+    & bw sync 2>$null | Out-Null
+    Assert-LastExitCode "Bitwarden sync"
 
-    Write-Host "Fetching items from Bitwarden..." -ForegroundColor Cyan
-
-    # Force output to a single string to prevent array-parsing issues in PowerShell 5.1
-    $itemsRaw = bw list items | Out-String
-
-    if ([string]::IsNullOrWhiteSpace($itemsRaw)) {
-        Write-Host "Warning: Bitwarden returned no items." -ForegroundColor Yellow
-        return @{}
-    }
-
+    Write-Host "Fetching SSH key items..." -ForegroundColor Cyan
+    $itemsRaw = (& bw list items | Out-String)
+    Assert-LastExitCode "Listing Bitwarden items"
     try {
-        $items = $itemsRaw | ConvertFrom-Json
+        $allItems = @($itemsRaw | ConvertFrom-Json -ErrorAction Stop)
     } catch {
-        Write-Host "Error parsing Bitwarden JSON. Try running 'bw sync' manually." -ForegroundColor Red
-        return @{}
+        throw "Bitwarden returned invalid item JSON."
+    }
+    return @($allItems | Where-Object { $_.type -eq 5 })
+}
+
+function Get-ItemField {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+    $field = @($Item.fields) | Where-Object {
+        $candidate = [string]$_.name
+        $Names -contains $candidate.ToLowerInvariant()
+    } | Select-Object -First 1
+    if ($field) { return [string]$field.value }
+    return ""
+}
+
+function Assert-SafeMetadata {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [switch]$AllowSpaces
+    )
+    if ($Value -match "[\x00-\x1F\x7F]") {
+        throw "$Label contains a control character."
+    }
+    if (-not $AllowSpaces -and $Value -match "[\s#]") {
+        throw "$Label contains unsupported whitespace or '#'."
+    }
+}
+
+function ConvertTo-SafeAlias {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    Assert-SafeMetadata -Value $Name -Label "SSH item name" -AllowSpaces
+    $alias = (($Name.ToLowerInvariant() -replace "[^a-z0-9._-]", "-") -replace "^-+", "") -replace "-+$", ""
+    if ([string]::IsNullOrWhiteSpace($alias) -or $alias -notmatch "^[a-z0-9][a-z0-9._-]*$") {
+        throw "Bitwarden item '$Name' produces an invalid SSH alias."
+    }
+    return $alias
+}
+
+function Write-ValidatedPublicKey {
+    param(
+        [Parameter(Mandatory = $true)][string]$PublicKey,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    if ([string]::IsNullOrWhiteSpace($PublicKey)) {
+        throw "Missing public key for $(Split-Path -Leaf $Path)."
+    }
+    Write-Utf8NoBom -Path $Path -Content ($PublicKey.Trim() + "`n")
+    & ssh-keygen -lf $Path 2>$null | Out-Null
+    Assert-LastExitCode "Validating public key $(Split-Path -Leaf $Path)"
+}
+
+function New-GeneratedFiles {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Items,
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [Parameter(Mandatory = $true)]$Preferences,
+        [Parameter(Mandatory = $true)][string]$StagingDir
+    )
+
+    $keysDir = Join-Path $StagingDir "keys"
+    [System.IO.Directory]::CreateDirectory($keysDir) | Out-Null
+    $aliases = @{}
+    $entries = New-Object System.Collections.Generic.List[string]
+    $manifest = New-Object System.Collections.Generic.List[string]
+    $manifest.Add("config")
+    $processed = 0
+    $signEmail = ""
+
+    foreach ($item in @($Items | Sort-Object { ([string]$_.name).ToLowerInvariant() })) {
+        $name = [string]$item.name
+        $alias = ConvertTo-SafeAlias $name
+        if ($aliases.ContainsKey($alias)) {
+            throw "Multiple Bitwarden items produce the SSH alias '$alias'."
+        }
+        $aliases[$alias] = $true
+
+        $hostname = Get-ItemField -Item $item -Names @("hostname")
+        $user = Get-ItemField -Item $item -Names @("user")
+        $email = Get-ItemField -Item $item -Names @("email", "gitemail")
+        Assert-SafeMetadata -Value $hostname -Label "HostName for '$name'"
+        Assert-SafeMetadata -Value $user -Label "User for '$name'"
+        Assert-SafeMetadata -Value $email -Label "Email for '$name'"
+
+        $publicKey = if ($item.sshKey) { [string]$item.sshKey.publicKey } else { "" }
+        $publicPath = Join-Path $keysDir "$alias.pub"
+        Write-ValidatedPublicKey -PublicKey $publicKey -Path $publicPath
+        $manifest.Add("keys/$alias.pub")
+
+        if ($alias -eq "git-sign") {
+            $signEmail = $email
+            if ($Preferences.agent_mode -eq "disk" -and $item.sshKey.privateKey) {
+                Write-Utf8NoBom -Path (Join-Path $keysDir "git-sign") -Content ([string]$item.sshKey.privateKey).Trim() + "`n"
+                $manifest.Add("keys/git-sign")
+            }
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($hostname)) {
+            throw "Bitwarden SSH item '$name' has no HostName field."
+        }
+        if ($item.organizationId -and $item.organizationId -ne "00000000-0000-0000-0000-000000000000") {
+            Write-Host "Using organization-owned SSH item: $name" -ForegroundColor Yellow
+        }
+
+        $identitySuffix = ".pub"
+        if ($Preferences.agent_mode -eq "disk") {
+            $privateKey = if ($item.sshKey) { [string]$item.sshKey.privateKey } else { "" }
+            if ([string]::IsNullOrWhiteSpace($privateKey)) {
+                throw "Disk mode requires a private key for '$name'."
+            }
+            Write-Utf8NoBom -Path (Join-Path $keysDir $alias) -Content ($privateKey.Trim() + "`n")
+            $manifest.Add("keys/$alias")
+            $identitySuffix = ""
+        }
+
+        $entry = "`nHost $alias`n  HostName $hostname`n"
+        if (-not [string]::IsNullOrWhiteSpace($user)) {
+            $entry += "  User $user`n"
+        }
+        $entry += "  IdentityFile `"~/.ssh/sync-ssh/current/keys/$alias$identitySuffix`"`n  IdentitiesOnly yes`n"
+        $entries.Add($entry)
+        $processed++
     }
 
-    $sshItems = @($items) | Where-Object { $_.type -eq 5 }
+    if ($Preferences.keep_alive -eq "yes") {
+        $entries.Add("`nHost *`n  ServerAliveInterval 60`n  ServerAliveCountMax 3`n")
+    } elseif ($Preferences.keep_alive -eq "no") {
+        $entries.Add("`nHost *`n  ServerAliveInterval 0`n")
+    }
 
-    # Create lookup dictionary: ID -> (name, hostname, user, publicKey, email)
-    $bwLookup = @{}
-    foreach ($item in $sshItems) {
-        # Robust field lookup
-        $fields = @($item.fields)
-        $hostnameField = $fields | Where-Object { $_.name -match "^HostName$" } | Select-Object -First 1
-        $userField     = $fields | Where-Object { $_.name -match "^User$" } | Select-Object -First 1
-        $emailField    = $fields | Where-Object { $_.name -match "^(Email|GitEmail)$" } | Select-Object -First 1
+    $generatedConfig = Join-Path $StagingDir "config"
+    Write-Utf8NoBom -Path $generatedConfig -Content ($entries -join "")
 
-        $bwLookup[$item.id] = @{
-            name           = $item.name
-            hostname       = if ($hostnameField) { $hostnameField.value } else { $null }
-            user           = if ($userField) { $userField.value } else { $null }
-            publicKey      = if ($item.sshKey) { $item.sshKey.publicKey } else { $null }
-            privateKey     = if ($item.sshKey) { $item.sshKey.privateKey } else { $null }
-            email          = if ($emailField) { $emailField.value } else { $null }
-            organizationId = $item.organizationId
+    $signPublic = Join-Path $keysDir "git-sign.pub"
+    if (Test-Path -LiteralPath $signPublic) {
+        if ([string]::IsNullOrWhiteSpace($signEmail) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+            $signEmail = (& git config --global --get user.email 2>$null | Out-String).Trim()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($signEmail)) {
+            $keyText = (Get-Content -LiteralPath $signPublic -Raw).Trim()
+            Write-Utf8NoBom -Path (Join-Path $StagingDir "allowed_signers") -Content "$signEmail $keyText`n"
+            $manifest.Add("allowed_signers")
         }
     }
 
-    Write-Host "Found $($bwLookup.Count) SSH keys in Bitwarden." -ForegroundColor Green
-    return $bwLookup
+    Write-Utf8NoBom -Path (Join-Path $StagingDir "manifest.json") -Content (
+        (@{ version = 1; files = @($manifest); private_keys = ($Preferences.agent_mode -eq "disk") } |
+            ConvertTo-Json -Depth 4) + "`n"
+    )
+
+    $validationAlias = @($aliases.Keys | Where-Object { $_ -ne "git-sign" } | Sort-Object | Select-Object -First 1)
+    if ($validationAlias.Count -eq 0) { $validationAlias = @("sync-ssh-validation") }
+    & ssh -F $generatedConfig -G $validationAlias[0] 2>$null | Out-Null
+    Assert-LastExitCode "Validating generated OpenSSH configuration"
+
+    return @{ Processed = $processed }
+}
+
+function New-StagedMainConfig {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $lines = @()
+    if (Test-Path -LiteralPath $Paths.MainConfig) {
+        $lines = @(Get-Content -LiteralPath $Paths.MainConfig)
+    } else {
+        $lines = @("Host *", "  Port 22", "  AddKeysToAgent yes", "  ForwardAgent no")
+    }
+
+    $startIndexes = @()
+    $endIndexes = @()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -eq $script:SyncStartMarker) { $startIndexes += $index }
+        if ($lines[$index] -eq $script:SyncEndMarker) { $endIndexes += $index }
+    }
+    if ($startIndexes.Count -ne $endIndexes.Count -or $startIndexes.Count -gt 1) {
+        throw "Malformed legacy sync-ssh markers in $($Paths.MainConfig); refusing to modify it."
+    }
+    if ($startIndexes.Count -eq 1) {
+        if ($endIndexes[0] -le $startIndexes[0]) {
+            throw "Malformed legacy sync-ssh marker ordering in $($Paths.MainConfig)."
+        }
+        $kept = New-Object System.Collections.Generic.List[string]
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($index -lt $startIndexes[0] -or $index -gt $endIndexes[0]) {
+                $kept.Add($lines[$index])
+            }
+        }
+        $lines = @($kept)
+    }
+
+    $includeCount = @($lines | Where-Object { $_ -eq $script:IncludeLine }).Count
+    if ($includeCount -gt 1) {
+        throw "Duplicate sync-ssh Include directives found in $($Paths.MainConfig)."
+    }
+    if ($includeCount -eq 0) {
+        $lines = @(
+            "# Added by Bitwarden SSH Sync",
+            $script:IncludeLine,
+            ""
+        ) + $lines
+    }
+    Write-Utf8NoBom -Path $Destination -Content (($lines -join "`n").TrimEnd() + "`n")
+}
+
+function Save-GitPreviousValue {
+    param(
+        [hashtable]$Paths,
+        [string]$Key,
+        [string]$Slug,
+        [string]$Owned
+    )
+    [System.IO.Directory]::CreateDirectory($Paths.GitStateDir) | Out-Null
+    $statePath = Join-Path $Paths.GitStateDir "$Slug.json"
+    if (-not (Test-Path -LiteralPath $statePath)) {
+        $previous = (& git config --global --get $Key 2>$null | Out-String).Trim()
+        $present = ($LASTEXITCODE -eq 0)
+        Write-Utf8NoBom -Path $statePath -Content (
+            (@{ key = $Key; present = $present; previous = $previous; owned = $Owned } |
+                ConvertTo-Json -Compress) + "`n"
+        )
+    } else {
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $state.owned = $Owned
+        Write-Utf8NoBom -Path $statePath -Content (($state | ConvertTo-Json -Compress) + "`n")
+    }
+}
+
+function Set-OwnedGitValue {
+    param([hashtable]$Paths, [string]$Key, [string]$Slug, [string]$Value)
+    Save-GitPreviousValue -Paths $Paths -Key $Key -Slug $Slug -Owned $Value
+    & git config --global $Key $Value
+    Assert-LastExitCode "Setting Git configuration '$Key'"
+}
+
+function Restore-OwnedGitValue {
+    param([hashtable]$Paths, [string]$Slug)
+    $statePath = Join-Path $Paths.GitStateDir "$Slug.json"
+    if (-not (Test-Path -LiteralPath $statePath)) { return }
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    $current = (& git config --global --get $state.key 2>$null | Out-String).Trim()
+    if ($current -eq $state.owned) {
+        if ($state.present) {
+            & git config --global $state.key ([string]$state.previous)
+        } else {
+            & git config --global --unset-all $state.key 2>$null
+        }
+    } else {
+        Write-Host "Preserving user-modified Git setting: $($state.key)" -ForegroundColor Yellow
+    }
+    Remove-Item -LiteralPath $statePath -Force
+}
+
+function Update-GitSigning {
+    param([hashtable]$Paths, $Preferences)
+    if ($Preferences.commit_signing -eq "skip") { return }
+    Ensure-Command git
+
+    if ($Preferences.commit_signing -eq "yes") {
+        $signingKey = Join-Path $Paths.CurrentDir "keys\git-sign.pub"
+        if (-not (Test-Path -LiteralPath $signingKey)) {
+            throw "Git signing is enabled, but no 'git-sign' public key was found."
+        }
+        Set-OwnedGitValue $Paths "gpg.format" "gpg-format" "ssh"
+        Set-OwnedGitValue $Paths "user.signingkey" "user-signingkey" $signingKey
+        Set-OwnedGitValue $Paths "commit.gpgsign" "commit-gpgsign" "true"
+        $allowed = Join-Path $Paths.CurrentDir "allowed_signers"
+        if (Test-Path -LiteralPath $allowed) {
+            Set-OwnedGitValue $Paths "gpg.ssh.allowedSignersFile" "allowed-signers-file" $allowed
+        }
+    } else {
+        Restore-OwnedGitValue $Paths "allowed-signers-file"
+        Restore-OwnedGitValue $Paths "commit-gpgsign"
+        Restore-OwnedGitValue $Paths "user-signingkey"
+        Restore-OwnedGitValue $Paths "gpg-format"
+    }
+}
+
+function Publish-GeneratedFiles {
+    param(
+        [hashtable]$Paths,
+        [string]$StagingDir,
+        [string]$StagedMain
+    )
+    [System.IO.Directory]::CreateDirectory($Paths.ManagedRoot) | Out-Null
+    $previous = Join-Path $Paths.ManagedRoot ".previous"
+    if (Test-Path -LiteralPath $previous) {
+        Remove-Item -LiteralPath $previous -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $Paths.CurrentDir) {
+        Move-Item -LiteralPath $Paths.CurrentDir -Destination $previous
+    }
+    try {
+        Move-Item -LiteralPath $StagingDir -Destination $Paths.CurrentDir
+    } catch {
+        if (Test-Path -LiteralPath $previous) {
+            Move-Item -LiteralPath $previous -Destination $Paths.CurrentDir
+        }
+        throw
+    }
+
+    $backup = Join-Path $Paths.StateDir "config.pre-sync-ssh"
+    if ((Test-Path -LiteralPath $Paths.MainConfig) -and -not (Test-Path -LiteralPath $backup)) {
+        Copy-Item -LiteralPath $Paths.MainConfig -Destination $backup
+    }
+    try {
+        if (Test-Path -LiteralPath $Paths.MainConfig) {
+            [System.IO.File]::Replace($StagedMain, $Paths.MainConfig, $null, $true)
+        } else {
+            [System.IO.File]::Move($StagedMain, $Paths.MainConfig)
+        }
+    } catch {
+        if (Test-Path -LiteralPath $Paths.CurrentDir) {
+            Remove-Item -LiteralPath $Paths.CurrentDir -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $previous) {
+            Move-Item -LiteralPath $previous -Destination $Paths.CurrentDir
+        }
+        throw
+    }
+    if (Test-Path -LiteralPath $previous) {
+        Remove-Item -LiteralPath $previous -Recurse -Force
+    }
+}
+
+function Set-ManagedPermissions {
+    param([hashtable]$Paths)
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls $Paths.ManagedRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "${currentUser}:(OI)(CI)F" /t | Out-Null
+    Assert-LastExitCode "Securing the sync-ssh managed directory"
 }
 
 function Sync-SSH {
-    <#
-    .SYNOPSIS
-    Sync SSH keys from Bitwarden metadata to create SSH config
-    #>
+    [CmdletBinding()]
     param(
-        [string]$OutputDir = "$HOME\.ssh"
+        [string]$OutputDir = "$HOME\.ssh",
+        [switch]$DryRun,
+        [switch]$Version
     )
 
-    try {
-        Ensure-BitwardenCli
-
-        # Initialize directories and config
-        $config = Initialize-SshConfig -OutputDir $OutputDir
-
-        # Unlock Bitwarden if needed
-        Unlock-BitwardenVault
-
-        # Get Bitwarden SSH key metadata
-        $bwLookup = Get-BitwardenSshKeys
-
-        # Get export private keys preference
-        $agentMode = git config sync-ssh.agent-mode
-        $exportPrivPref = git config sync-ssh.export-private-keys
-        $exportPriv = ($agentMode -eq "disk") -or ($exportPrivPref -eq "yes")
-
-        # Process Git Signing
-        $gitSign = $bwLookup.Values | Where-Object { $_.name -eq "git-sign" } | Select-Object -First 1
-        if ($gitSign -and $gitSign.publicKey) {
-            $signPub = Join-Path $config.KeysDir "git-sign.pub"
-            $gitSign.publicKey.Trim() | Out-File -FilePath $signPub -Encoding utf8 -Force
-
-            if ($exportPriv -and $gitSign.privateKey) {
-                $signPriv = Join-Path $config.KeysDir "git-sign"
-                $gitSign.privateKey.Trim() | Out-File -FilePath $signPriv -Encoding utf8 -Force
-            }
-
-            git config --global gpg.format ssh
-            git config --global user.signingkey "$signPub"
-            git config --global commit.gpgsign true
-            Write-Host "Synced Git signing key: git-sign" -ForegroundColor Green
+    $ErrorActionPreference = "Stop"
+    if ($Version) {
+        $versionFile = Join-Path $PSScriptRoot "VERSION"
+        if (-not (Test-Path -LiteralPath $versionFile)) {
+            $versionFile = Join-Path (Split-Path $PSScriptRoot -Parent) "VERSION"
         }
-
-        # Sync Loop
-        $newManagedContent = ""
-        $processedCount = 0
-
-        foreach ($id in $bwLookup.Keys) {
-            $item = $bwLookup[$id]
-            if ($item.name -eq "git-sign") { continue }
-
-            if (-not $item.publicKey -or -not $item.hostname) {
-                Write-Host "Skipping '$($item.name)': Missing HostName or Public Key" -ForegroundColor Yellow
-                continue
-            }
-
-            if ($item.organizationId -and $item.organizationId -ne "00000000-0000-0000-0000-000000000000") {
-                Write-Host "Notice: '$($item.name)' is an Org key." -ForegroundColor Yellow
-            }
-
-            $safeName = $item.name -replace '[^a-zA-Z0-9._-]', '-' -replace '^-|-$', ''
-            $pubkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower()).pub"
-            $item.publicKey.Trim() | Out-File -FilePath $pubkeyFile -Encoding utf8 -Force
-
-            $identityFile = $pubkeyFile
-
-            if ($exportPriv -and $item.privateKey) {
-                $privkeyFile = Join-Path $config.KeysDir "$($safeName.ToLower())"
-                $item.privateKey.Trim() | Out-File -FilePath $privkeyFile -Encoding utf8 -Force
-                $identityFile = $privkeyFile
-            }
-
-            $entry = "`nHost $($safeName.ToLower())`n  HostName $($item.hostname)`n"
-            if ($item.user) { $entry += "  User $($item.user)`n" }
-            $entry += "  IdentityFile `"$identityFile`"`n  IdentitiesOnly yes`n"
-
-            $newManagedContent += $entry
-            $processedCount++
-        }
-
-
-
-
-        # Apply SSH KeepAlive preference
-        $keepAlivePref = git config sync-ssh.keep-alive
-        if ($keepAlivePref -eq "yes") {
-            $newManagedContent += "`nHost *`n  ServerAliveInterval 60`n  ServerAliveCountMax 3`n"
-        } elseif ($keepAlivePref -eq "no") {
-            $newManagedContent += "`nHost *`n  ServerAliveInterval 0`n"
-        }
-
-        # Update the config file using managed block
-        $configPath = $config.SshConfig
-        $currentContent = Get-Content -Path $configPath -Raw
-
-        $replacement = "$SYNC_START_MARKER`n# This section is automatically generated. Manual changes will be lost.$newManagedContent`n$SYNC_END_MARKER"
-
-        $startIdx = $currentContent.IndexOf($SYNC_START_MARKER)
-        $endIdx = $currentContent.IndexOf($SYNC_END_MARKER)
-
-        if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
-            $before = $currentContent.Substring(0, $startIdx)
-            $after = $currentContent.Substring($endIdx + $SYNC_END_MARKER.Length)
-            $newFileContent = $before + $replacement + $after
-            $newFileContent | Out-File -FilePath $configPath -Encoding utf8
+        if (Test-Path -LiteralPath $versionFile) {
+            Write-Output (Get-Content -LiteralPath $versionFile -Raw).Trim()
         } else {
-            # Fallback: append if markers lost for some reason (shouldn't happen due to Initialize-SshConfig)
-            $replacement | Out-File -FilePath $configPath -Append -Encoding utf8
+            Write-Output "development"
+        }
+        return
+    }
+
+    $paths = Get-SyncPaths -OutputDir $OutputDir
+    $lock = $null
+    $stagingDir = $null
+    $stagedMain = $null
+
+    try {
+        Ensure-Command bw
+        Ensure-Command ssh
+        Ensure-Command ssh-keygen
+        Resolve-MainConfigPath -Paths $paths
+        $preferences = Get-Preferences -Paths $paths
+        $lock = Enter-SyncLock -Paths $paths
+        $items = Get-BitwardenItems
+
+        [System.IO.Directory]::CreateDirectory($paths.OutputDir) | Out-Null
+        [System.IO.Directory]::CreateDirectory($paths.ManagedRoot) | Out-Null
+        $stagingDir = Join-Path $paths.ManagedRoot (".staging." + [Guid]::NewGuid().ToString("N"))
+        [System.IO.Directory]::CreateDirectory($stagingDir) | Out-Null
+        $result = New-GeneratedFiles -Items $items -Paths $paths -Preferences $preferences -StagingDir $stagingDir
+
+        $stagedMain = Join-Path (Split-Path $paths.MainConfig -Parent) (".sync-ssh-config." + [Guid]::NewGuid().ToString("N"))
+        New-StagedMainConfig -Paths $paths -Destination $stagedMain
+        if ($preferences.commit_signing -eq "yes") {
+            Ensure-Command git
+            if (-not (Test-Path -LiteralPath (Join-Path $stagingDir "keys\git-sign.pub"))) {
+                throw "Git signing is enabled, but no 'git-sign' public key was found."
+            }
+        }
+        if ($DryRun) {
+            Write-Host "Dry run successful: generated configuration passed validation; active files were not changed." -ForegroundColor Cyan
+            return
         }
 
-        Write-Host "`n[OK] Done! Synced $processedCount SSH keys and updated managed section in config!" -ForegroundColor Green
+        Publish-GeneratedFiles -Paths $paths -StagingDir $stagingDir -StagedMain $stagedMain
+        $stagingDir = $null
+        $stagedMain = $null
 
-    }
-    catch {
-        Write-Host "`n> Error: $_" -ForegroundColor Red
-        Write-Host "> StackTrace: $($_.ScriptStackTrace)" -ForegroundColor Gray
+        Set-ManagedPermissions -Paths $paths
+        Update-GitSigning -Paths $paths -Preferences $preferences
+        Write-Host "[OK] Synced $($result.Processed) SSH hosts using $($preferences.agent_mode) mode." -ForegroundColor Green
+    } finally {
+        if ($stagingDir -and (Test-Path -LiteralPath $stagingDir)) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force
+        }
+        if ($stagedMain -and (Test-Path -LiteralPath $stagedMain)) {
+            Remove-Item -LiteralPath $stagedMain -Force
+        }
+        if ($lock) {
+            $lock.Dispose()
+            Remove-Item -LiteralPath $paths.LockFile -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
-# If script is run directly (not dot-sourced), execute the sync
-if ($MyInvocation.InvocationName -ne '.') {
-    Sync-SSH
+if ($MyInvocation.InvocationName -ne ".") {
+    try {
+        Sync-SSH -DryRun:$SyncSshDryRun -Version:$SyncSshVersion
+    } catch {
+        Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
 }

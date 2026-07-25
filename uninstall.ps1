@@ -1,90 +1,147 @@
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Stop"
 
-$InstallDir   = "$env:LOCALAPPDATA\sync-ssh"
-$SyncScript   = Join-Path $InstallDir "sync.ps1"
-$SyncStartMarker = "# --- START SYNC-SSH MANAGED SECTION ---"
-$SyncEndMarker   = "# --- END SYNC-SSH MANAGED SECTION ---"
+$installDir = Join-Path $env:LOCALAPPDATA "sync-ssh"
+$managedRoot = Join-Path (Join-Path $HOME ".ssh") "sync-ssh"
+$mainConfig = Join-Path (Join-Path $HOME ".ssh") "config"
+$preferencesDir = Join-Path $env:APPDATA "sync-ssh"
+$stateDir = Join-Path $env:LOCALAPPDATA "sync-ssh-state"
+$gitStateDir = Join-Path $stateDir "git"
+$includeLine = "Include ~/.ssh/sync-ssh/current/config"
+$startMarker = "# --- START SYNC-SSH MANAGED SECTION ---"
+$endMarker = "# --- END SYNC-SSH MANAGED SECTION ---"
+
+if (Test-Path -LiteralPath $mainConfig) {
+    $mainConfigItem = Get-Item -LiteralPath $mainConfig -Force
+    if ($mainConfigItem.LinkType -eq "SymbolicLink") {
+        $target = [string]$mainConfigItem.Target
+        if (-not [System.IO.Path]::IsPathRooted($target)) {
+            $target = Join-Path (Split-Path $mainConfigItem.FullName -Parent) $target
+        }
+        $mainConfig = [System.IO.Path]::GetFullPath($target)
+    }
+}
+
+function Write-Utf8NoBom {
+    param([string]$Path, [AllowEmptyString()][string]$Content)
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Confirm-Action {
+    param([string]$Prompt)
+    $answer = (Read-Host "$Prompt (y/n) [n]").Trim().ToLowerInvariant()
+    return $answer -in @("y", "yes")
+}
+
+function Restore-OwnedGitValue {
+    param([string]$Slug)
+    $statePath = Join-Path $gitStateDir "$Slug.json"
+    if (-not (Test-Path -LiteralPath $statePath)) { return }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Host "Git is unavailable; preserving restoration state: $statePath" -ForegroundColor Yellow
+        return
+    }
+
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    $current = (& git config --global --get $state.key 2>$null | Out-String).Trim()
+    if ($current -eq $state.owned) {
+        if ($state.present) {
+            & git config --global $state.key ([string]$state.previous)
+        } else {
+            & git config --global --unset-all $state.key 2>$null
+        }
+    } else {
+        Write-Host "Preserving user-modified Git setting: $($state.key)" -ForegroundColor Yellow
+    }
+    Remove-Item -LiteralPath $statePath -Force
+}
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Sync-SSH Uninstaller" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host
 
-function Confirm-Action {
-    param([string]$Prompt)
-    $answer = Read-Host "$Prompt (y/n) [n]"
-    return ($answer.Trim().ToLower() -eq 'y' -or $answer.Trim().ToLower() -eq 'yes')
-}
-
-# 1. Remove the dot-source line from $PROFILE
-Write-Host "Removing PowerShell profile entry..." -ForegroundColor Gray
-if (Test-Path $PROFILE) {
-    $profileContent = Get-Content -Path $PROFILE -Raw -ErrorAction SilentlyContinue
-    if ($profileContent -match [regex]::Escape($SyncScript)) {
-        # Filter out lines referencing sync-ssh
-        $newLines = (Get-Content -Path $PROFILE) | Where-Object {
-            $_ -notmatch [regex]::Escape($SyncScript) -and
-            $_ -notmatch "# Added by Bitwarden SSH Sync setup"
+$syncScript = Join-Path $installDir "sync.ps1"
+if (Test-Path -LiteralPath $PROFILE) {
+    $lines = @(Get-Content -LiteralPath $PROFILE)
+    $filteredList = New-Object System.Collections.Generic.List[string]
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -eq "# Added by Bitwarden SSH Sync setup" -and
+            $index + 1 -lt $lines.Count -and
+            $lines[$index + 1] -match '^\.\s+"[^"]+[\\/]sync\.ps1"$') {
+            $index++
+            continue
         }
-        $newLines | Set-Content -Path $PROFILE -Encoding UTF8
-        Write-Host "  Cleaned: $PROFILE" -ForegroundColor Green
-    } else {
-        Write-Host "  No Sync-SSH entry found in $PROFILE" -ForegroundColor Gray
+        if ($lines[$index] -eq ". `"$syncScript`"") { continue }
+        $filteredList.Add($lines[$index])
     }
-} else {
-    Write-Host "  Profile not found at $PROFILE, skipping." -ForegroundColor Gray
-}
-
-# 2. Remove the install directory
-if (Test-Path $InstallDir) {
-    Remove-Item -Recurse -Force $InstallDir
-    Write-Host "Removed: $InstallDir" -ForegroundColor Green
-}
-
-# 3. Optionally remove synced public keys
-Write-Host
-$keysDir = "$HOME\.ssh\keys"
-if (Confirm-Action "Remove synced public keys from $keysDir?") {
-    if (Test-Path $keysDir) {
-        Remove-Item -Recurse -Force $keysDir
-        Write-Host "  Removed: $keysDir" -ForegroundColor Green
-    } else {
-        Write-Host "  $keysDir not found, skipping." -ForegroundColor Gray
+    $filtered = @($filteredList)
+    if ($filtered.Count -ne $lines.Count) {
+        Write-Utf8NoBom -Path $PROFILE -Content (($filtered -join "`r`n").TrimEnd() + "`r`n")
+        Write-Host "Cleaned PowerShell profile: $PROFILE" -ForegroundColor Green
     }
 }
 
-# 4. Optionally remove the managed block from ~/.ssh/config
-Write-Host
-$sshConfig = "$HOME\.ssh\config"
-if (Confirm-Action "Remove the managed SSH config block from $sshConfig?") {
-    if (Test-Path $sshConfig) {
-        $lines = Get-Content -Path $sshConfig
-        $result = @()
-        $skip = $false
-        foreach ($line in $lines) {
-            if ($line -eq $SyncStartMarker) { $skip = $true; continue }
-            if ($line -eq $SyncEndMarker)   { $skip = $false; continue }
-            if (-not $skip) { $result += $line }
+if (Test-Path -LiteralPath $installDir) {
+    Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+
+if (Confirm-Action "Remove generated SSH configuration and keys from $managedRoot?") {
+    if (Test-Path -LiteralPath $managedRoot) {
+        Remove-Item -LiteralPath $managedRoot -Recurse -Force
+        Write-Host "Removed tool-owned SSH files." -ForegroundColor Green
+    }
+}
+
+if (Confirm-Action "Remove the sync-ssh Include line or legacy managed block from $mainConfig?") {
+    if (Test-Path -LiteralPath $mainConfig) {
+        $lines = @(Get-Content -LiteralPath $mainConfig)
+        $starts = @()
+        $ends = @()
+        for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -eq $startMarker) { $starts += $index }
+            if ($lines[$index] -eq $endMarker) { $ends += $index }
         }
-        $result | Set-Content -Path $sshConfig -Encoding UTF8
-        Write-Host "  Managed block removed from $sshConfig" -ForegroundColor Green
-    } else {
-        Write-Host "  $sshConfig not found, skipping." -ForegroundColor Gray
+        if ($starts.Count -ne $ends.Count -or $starts.Count -gt 1) {
+            Write-Host "Malformed legacy markers found; refusing to edit $mainConfig." -ForegroundColor Red
+        } elseif ($starts.Count -eq 1 -and $ends[0] -le $starts[0]) {
+            Write-Host "Malformed legacy marker ordering; refusing to edit $mainConfig." -ForegroundColor Red
+        } else {
+            $result = New-Object System.Collections.Generic.List[string]
+            for ($index = 0; $index -lt $lines.Count; $index++) {
+                if ($starts.Count -eq 1 -and $index -ge $starts[0] -and $index -le $ends[0]) { continue }
+                if ($lines[$index] -eq $includeLine) { continue }
+                if ($lines[$index] -eq "# Added by Bitwarden SSH Sync") { continue }
+                $result.Add($lines[$index])
+            }
+            Write-Utf8NoBom -Path $mainConfig -Content ((@($result) -join "`r`n").TrimEnd() + "`r`n")
+            Write-Host "Removed Sync-SSH configuration from $mainConfig." -ForegroundColor Green
+        }
     }
 }
 
-# 5. Optionally remove git config entries
-Write-Host
-if (Confirm-Action "Remove Sync-SSH git config entries (sync-ssh.* globals)?") {
-    $gitKeys = @('sync-ssh.commit-signing', 'sync-ssh.keep-alive', 'sync-ssh.agent-mode')
-    foreach ($key in $gitKeys) {
-        git config --global --unset $key 2>$null
-    }
-    Write-Host "  Git config entries removed." -ForegroundColor Green
+if (Confirm-Action "Restore Git settings previously changed by Sync-SSH?") {
+    Restore-OwnedGitValue "allowed-signers-file"
+    Restore-OwnedGitValue "commit-gpgsign"
+    Restore-OwnedGitValue "user-signingkey"
+    Restore-OwnedGitValue "gpg-format"
 }
 
-Write-Host
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Sync-SSH has been uninstalled." -ForegroundColor Cyan
-Write-Host "  Restart PowerShell to apply changes." -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    foreach ($legacyKey in @(
+        "sync-ssh.commit-signing",
+        "sync-ssh.keep-alive",
+        "sync-ssh.agent-mode",
+        "sync-ssh.export-private-keys"
+    )) {
+        & git config --global --unset-all $legacyKey 2>$null
+    }
+}
+
+if (Test-Path -LiteralPath $preferencesDir) {
+    Remove-Item -LiteralPath $preferencesDir -Recurse -Force
+}
+if ((Test-Path -LiteralPath $stateDir) -and
+    -not (Get-ChildItem -LiteralPath $stateDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    Remove-Item -LiteralPath $stateDir -Force
+}
+
+Write-Host "`nSync-SSH has been uninstalled. Restart PowerShell to remove loaded functions." -ForegroundColor Cyan
