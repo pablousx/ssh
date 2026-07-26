@@ -133,7 +133,7 @@ stage it, and restore the previous installation if setup fails.
 ### Linux and WSL
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/refs/heads/main/install.sh | sh
 ```
 
 To install a different release with a downloaded installer:
@@ -145,7 +145,7 @@ SSHWITCH_VERSION=v1.1.0 sh install.sh
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/pablousx/sshwitch/refs/heads/main/install.ps1 | iex
 ```
 
 To select another release:
@@ -278,13 +278,13 @@ editing the file.
 Linux and WSL:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/refs/heads/main/uninstall.sh | sh
 ```
 
 Windows:
 
 ```powershell
-irm https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/pablousx/sshwitch/refs/heads/main/uninstall.ps1 | iex
 ```
 
 The uninstallers ask before removing generated SSH files, the include/legacy
