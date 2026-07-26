@@ -2,7 +2,7 @@
 set -eu
 
 VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-v1.0.0}}"
-REPOSITORY="pablousx/ssh"
+REPOSITORY="pablousx/sshwitch"
 INSTALL_PARENT="$HOME/.local/share"
 INSTALL_DIR="$INSTALL_PARENT/sshwitch"
 LEGACY_INSTALL_DIR="$INSTALL_PARENT/sync-ssh"

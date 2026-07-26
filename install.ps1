@@ -7,7 +7,7 @@ $version = if ($env:SSHWITCH_VERSION) {
 } else {
     "v1.0.0"
 }
-$repository = "pablousx/ssh"
+$repository = "pablousx/sshwitch"
 $installDir = Join-Path $env:LOCALAPPDATA "sshwitch"
 $legacyInstallDir = Join-Path $env:LOCALAPPDATA "sync-ssh"
 $installParent = Split-Path $installDir -Parent
