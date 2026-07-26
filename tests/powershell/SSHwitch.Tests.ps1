@@ -157,6 +157,47 @@ Describe "SSHwitch source safety" {
         }
     }
 
+    It "atomically publishes over an existing SSH config" {
+        $outputDir = Join-Path $TestDrive "publish-existing"
+        $managedRoot = Join-Path $outputDir "sshwitch"
+        $currentDir = Join-Path $managedRoot "current"
+        $stagingDir = Join-Path $managedRoot ".staging.test"
+        $stateDir = Join-Path $TestDrive "publish-state"
+        $mainConfig = Join-Path $outputDir "config"
+        $stagedMain = Join-Path $outputDir ".sshwitch-config.test"
+        [System.IO.Directory]::CreateDirectory($currentDir) | Out-Null
+        [System.IO.Directory]::CreateDirectory($stagingDir) | Out-Null
+        [System.IO.Directory]::CreateDirectory($stateDir) | Out-Null
+        Write-Utf8NoBom -Path (Join-Path $currentDir "config") -Content "Host old`n"
+        Write-Utf8NoBom -Path (Join-Path $stagingDir "config") -Content "Host new`n"
+        Write-Utf8NoBom -Path $mainConfig -Content "Host manual`n"
+        Write-Utf8NoBom -Path $stagedMain -Content (
+            "$script:IncludeLine`nHost manual`n"
+        )
+        $paths = @{
+            ManagedRoot = $managedRoot
+            CurrentDir = $currentDir
+            StateDir = $stateDir
+            MainConfig = $mainConfig
+        }
+
+        Publish-GeneratedFiles -Paths $paths -StagingDir $stagingDir -StagedMain $stagedMain
+
+        $publishedMain = Get-Content -LiteralPath $mainConfig -Raw
+        $publishedGeneration = Get-Content -LiteralPath (Join-Path $currentDir "config") -Raw
+        $originalBackup = Get-Content -LiteralPath (
+            Join-Path $stateDir "config.pre-sshwitch"
+        ) -Raw
+        if ($publishedMain -notmatch [regex]::Escape($script:IncludeLine) -or
+            $publishedGeneration -notmatch "Host new" -or
+            $originalBackup -notmatch "Host manual") {
+            throw "Existing SSH config publication produced unexpected content."
+        }
+        if (Get-ChildItem -LiteralPath $outputDir -Filter ".sshwitch-config.backup.*") {
+            throw "Atomic SSH config publication left a temporary backup behind."
+        }
+    }
+
     It "generates an agent-mode config without a private key" {
         $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("sshwitch-test-" + [Guid]::NewGuid().ToString("N"))
         try {

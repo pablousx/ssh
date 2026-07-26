@@ -548,6 +548,7 @@ function Publish-GeneratedFiles {
     )
     [System.IO.Directory]::CreateDirectory($Paths.ManagedRoot) | Out-Null
     $previous = Join-Path $Paths.ManagedRoot ".previous"
+    $replaceBackup = $null
     if (Test-Path -LiteralPath $previous) {
         Remove-Item -LiteralPath $previous -Recurse -Force
     }
@@ -569,7 +570,15 @@ function Publish-GeneratedFiles {
     }
     try {
         if (Test-Path -LiteralPath $Paths.MainConfig) {
-            [System.IO.File]::Replace($StagedMain, $Paths.MainConfig, $null, $true)
+            $replaceBackup = Join-Path (
+                Split-Path $Paths.MainConfig -Parent
+            ) (".sshwitch-config.backup." + [Guid]::NewGuid().ToString("N"))
+            [System.IO.File]::Replace(
+                $StagedMain,
+                $Paths.MainConfig,
+                $replaceBackup,
+                $true
+            )
         } else {
             [System.IO.File]::Move($StagedMain, $Paths.MainConfig)
         }
@@ -581,6 +590,10 @@ function Publish-GeneratedFiles {
             Move-Item -LiteralPath $previous -Destination $Paths.CurrentDir
         }
         throw
+    } finally {
+        if ($replaceBackup -and (Test-Path -LiteralPath $replaceBackup)) {
+            Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+        }
     }
     if (Test-Path -LiteralPath $previous) {
         Remove-Item -LiteralPath $previous -Recurse -Force

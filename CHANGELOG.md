@@ -26,6 +26,11 @@ All notable changes are documented here. Versions follow Semantic Versioning.
   the selected SSH agent.
 - Generated comments use the provider-neutral SSHwitch name.
 
+### Fixed
+
+- Windows publication no longer passes an empty backup path to
+  `System.IO.File.Replace` when the main SSH config already exists.
+
 ### Security
 
 - Canonical provider records cannot contain private-key fields.
