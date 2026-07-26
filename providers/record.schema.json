@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sshwitch.dev/schemas/provider-records-v1.json",
+  "title": "SSHwitch provider record envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "records"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "provider": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "name",
+        "role",
+        "destination",
+        "identity",
+        "git_principal",
+        "shared"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["host", "git-sign"]
+        },
+        "destination": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hostname", "user"],
+          "properties": {
+            "hostname": {
+              "type": "string"
+            },
+            "user": {
+              "type": "string"
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_key"],
+          "properties": {
+            "public_key": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "git_principal": {
+          "type": "string"
+        },
+        "shared": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

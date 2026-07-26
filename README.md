@@ -1,19 +1,20 @@
-# Bitwarden SSH Sync
+# SSHwitch
 
-Bitwarden SSH Sync builds a validated OpenSSH configuration from Bitwarden SSH
-key items on Linux, WSL, and Windows.
+SSHwitch builds a validated OpenSSH configuration from provider-managed SSH
+records on Linux, WSL, and Windows. Bitwarden is the first built-in provider.
 
-It supports the Bitwarden SSH Agent by default. An explicitly confirmed disk
-mode is available for environments that require exported private keys.
+It uses the provider's SSH agent by default. An explicitly confirmed disk
+identity backend is available for environments that require exported private
+keys.
 
 ## How it works
 
-For every Bitwarden item of type **SSH Key**:
+For every SSH record returned by the configured provider:
 
 1. The item name becomes the SSH alias after deterministic sanitization.
 2. The custom `HostName` field becomes the destination host.
 3. The optional custom `User` field becomes the SSH user.
-4. The public key selects the corresponding identity from the Bitwarden agent.
+4. The public key selects the corresponding identity from the configured agent.
 
 For example, an item named `Production Server` with `HostName=prod.example.com`
 and `User=ubuntu` produces:
@@ -22,28 +23,31 @@ and `User=ubuntu` produces:
 Host production-server
   HostName prod.example.com
   User ubuntu
-  IdentityFile "~/.ssh/sync-ssh/current/keys/production-server.pub"
+  IdentityFile "~/.ssh/sshwitch/current/keys/production-server.pub"
   IdentitiesOnly yes
 ```
 
 The main `~/.ssh/config` receives one exact include:
 
 ```sshconfig
-Include ~/.ssh/sync-ssh/current/config
+Include ~/.ssh/sshwitch/current/config
 ```
 
 Manual SSH entries remain outside the generated file.
 
 ## Safety properties
 
-- A failed Bitwarden command, parse, validation, or filesystem operation leaves
+- A failed provider command, parse, validation, or filesystem operation leaves
   the active generation unchanged.
+- Provider records must match the versioned, secret-free canonical schema.
 - Vault-derived metadata containing control characters or unsafe whitespace is
   rejected.
 - Duplicate normalized aliases are rejected.
 - Public keys and the generated OpenSSH config are validated before publishing.
 - Concurrent syncs are blocked by a lock.
 - Agent mode never persists private keys.
+- Agent mode verifies that every provider public key is available from the
+  selected SSH agent before publication.
 - Switching from disk mode to agent mode replaces the complete generation,
   removing managed private-key files.
 - Windows files are written as UTF-8 without BOM on Windows PowerShell 5.1 and
@@ -52,6 +56,31 @@ Manual SSH entries remain outside the generated file.
   SSH configuration entries.
 
 See [SECURITY.md](SECURITY.md) for the trust model and vulnerability reporting.
+
+## Provider architecture
+
+Provider adapters authenticate, list SSH records, and optionally export one
+private key when the explicit disk policy permits it. The core owns all
+normalization, validation, agent matching, generation, Git configuration,
+staging, and publication.
+
+Adapters return a version 1 envelope defined by
+[`providers/record.schema.json`](providers/record.schema.json). The envelope can
+contain public keys and validated metadata but cannot contain private-key
+fields. Private-key export is a separate provider capability and is never
+called when `private_key_policy=never`.
+
+The current preferences are:
+
+| Preference | Current values | Purpose |
+|---|---|---|
+| `provider` | `bitwarden` | Record source adapter |
+| `identity_backend` | `agent`, `disk` | How OpenSSH uses the identity |
+| `private_key_policy` | `never`, `export` | Whether the provider may export private keys |
+
+Only `agent`/`never` and `disk`/`export` are accepted. Existing
+`agent_mode=bitwarden` and `agent_mode=disk` preferences are mapped at runtime;
+running setup writes the version 2 preference format.
 
 ## Bitwarden item setup
 
@@ -63,9 +92,12 @@ Create an item of type **SSH Key** with:
 | `HostName` custom field | Yes for host entries | Server hostname or IP |
 | `User` custom field | No | SSH username |
 | `Email` or `GitEmail` custom field | No | Principal for `allowed_signers` on `git-sign` |
+| `SSHwitchRole=git-sign` | No | Marks any named item as the Git signing identity |
 
-The reserved item name `git-sign` is used for Git SSH signing and is not emitted
-as an SSH host.
+The legacy reserved item name `git-sign` remains supported. A
+`SSHwitchRole=git-sign` field can instead mark an item with any display name as
+the signing identity. The previous `SyncSSHRole` field remains accepted during
+migration. Signing identities are not emitted as SSH hosts.
 
 Alias normalization lowercases the item name, replaces characters outside
 `a-z`, `0-9`, `.`, `_`, and `-` with `-`, and trims leading/trailing dashes.
@@ -78,7 +110,7 @@ All platforms require:
 - [Bitwarden Desktop](https://bitwarden.com/download/) with SSH Agent enabled;
 - [Bitwarden CLI](https://bitwarden.com/help/cli/) (`bw`), logged in with
   `bw login`;
-- OpenSSH client tools (`ssh` and `ssh-keygen`).
+- OpenSSH client tools (`ssh`, `ssh-add`, and `ssh-keygen`).
 
 Linux and WSL additionally require:
 
@@ -107,7 +139,7 @@ curl -fsSL https://raw.githubusercontent.com/pablousx/ssh/v1.0.0/install.sh | sh
 To install a different release with a downloaded installer:
 
 ```sh
-SYNC_SSH_VERSION=v1.1.0 sh install.sh
+SSHWITCH_VERSION=v1.1.0 sh install.sh
 ```
 
 ### Windows
@@ -119,7 +151,7 @@ irm https://raw.githubusercontent.com/pablousx/ssh/v1.0.0/install.ps1 | iex
 To select another release:
 
 ```powershell
-$env:SYNC_SSH_VERSION = "v1.1.0"
+$env:SSHWITCH_VERSION = "v1.1.0"
 .\install.ps1
 ```
 
@@ -152,30 +184,30 @@ typing an explicit confirmation phrase.
 Linux and WSL:
 
 ```sh
-sync-ssh
-sync-ssh --dry-run
-sync-ssh --version
+sshwitch
+sshwitch --dry-run
+sshwitch --version
 ```
 
 Windows:
 
 ```powershell
-Sync-SSH
-Sync-SSH -DryRun
-Sync-SSH -Version
+SSHwitch
+SSHwitch -DryRun
+SSHwitch -Version
 ```
 
-A dry run authenticates with Bitwarden, generates and validates a staging
+A dry run authenticates with the configured provider, generates and validates a staging
 generation, and reports success without replacing active SSH or Git settings.
 
 ## Git SSH signing
 
 During setup, enable Git SSH signing and add a Bitwarden SSH key item named
-`git-sign`. The optional `Email` or `GitEmail` field becomes the principal in
-the generated `allowed_signers` file; the global Git email is used as a
-fallback.
+`git-sign`, or set `SSHwitchRole=git-sign` on another SSH key item. The optional
+`Email` or `GitEmail` field becomes the principal in the generated
+`allowed_signers` file; the global Git email is used as a fallback.
 
-When enabled, Sync-SSH owns these global Git settings:
+When enabled, SSHwitch owns these global Git settings:
 
 - `gpg.format`
 - `user.signingkey`
@@ -184,7 +216,7 @@ When enabled, Sync-SSH owns these global Git settings:
 
 The previous value and whether it existed are recorded before modification.
 Disabling the feature or uninstalling restores a setting only if it still
-contains the value written by Sync-SSH. User-modified values are preserved.
+contains the value written by SSHwitch. User-modified values are preserved.
 
 ## WSL agent bridge
 
@@ -200,7 +232,7 @@ Linux ssh
   -> Bitwarden Desktop
 ```
 
-If Bitwarden or the bridge restarts:
+If the Windows agent or the bridge restarts:
 
 ```sh
 reset-ssh-agent
@@ -215,19 +247,27 @@ Linux and WSL:
 
 | Path | Purpose |
 |---|---|
-| `~/.ssh/sync-ssh/current/` | Active generated config, keys, and manifest |
-| `~/.config/sync-ssh/config` | Preferences, or `$XDG_CONFIG_HOME` |
-| `~/.local/state/sync-ssh/` | Lock, backups, bridge PID, and Git restoration state |
-| `~/.ssh/sync-ssh-env.sh` | Shell functions and agent environment |
+| `~/.ssh/sshwitch/current/` | Active generated config, keys, and manifest |
+| `~/.config/sshwitch/config` | Preferences, or `$XDG_CONFIG_HOME` |
+| `~/.local/state/sshwitch/` | Lock, backups, bridge PID, and Git restoration state |
+| `~/.ssh/sshwitch-env.sh` | Shell functions and agent environment |
 
 Windows:
 
 | Path | Purpose |
 |---|---|
-| `~\.ssh\sync-ssh\current\` | Active generated config, keys, and manifest |
-| `%APPDATA%\sync-ssh\config.json` | Preferences |
-| `%LOCALAPPDATA%\sync-ssh-state\` | Lock, backups, and Git restoration state |
-| `%LOCALAPPDATA%\sync-ssh\` | Installed scripts |
+| `~\.ssh\sshwitch\current\` | Active generated config, keys, and manifest |
+| `%APPDATA%\sshwitch\config.json` | Preferences |
+| `%LOCALAPPDATA%\sshwitch-state\` | Lock, backups, and Git restoration state |
+| `%LOCALAPPDATA%\sshwitch\` | Installed scripts |
+
+### Migration from Sync-SSH
+
+Running SSHwitch setup imports existing preferences and Git-restoration state
+from the former `sync-ssh` directories. The first successful sync replaces the
+old `Include ~/.ssh/sync-ssh/current/config` with the SSHwitch Include only
+after a complete new generation passes validation. The former `sync-ssh`
+command remains as a deprecated shell alias or PowerShell wrapper.
 
 Legacy managed blocks are migrated only when exactly one correctly ordered
 start/end marker pair exists. Malformed markers cause sync to stop without
@@ -266,7 +306,8 @@ Then retry sync.
 ### The SSH agent has no identities
 
 Confirm that Bitwarden Desktop is open, the vault is unlocked, and SSH Agent is
-enabled. Then inspect:
+enabled. Sync deliberately fails before publication when a provider public key
+is missing from the agent. Inspect:
 
 ```sh
 ssh-add -L

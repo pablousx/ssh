@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+[ "${1:-}" = "-L" ] || exit 2
+[ "${MOCK_AGENT_FAILURE:-0}" = "0" ] || exit 2
+if [ "${MOCK_AGENT_MISMATCH:-0}" = "1" ]; then
+    printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMismatchOnly sshwitch-test\n'
+else
+    printf '%s\n' "$MOCK_PUBLIC_KEY"
+fi

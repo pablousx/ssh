@@ -31,22 +31,33 @@ assert_contains() {
 new_home() {
     case_name=$1
     TEST_HOME="$TEST_ROOT/$case_name"
-    mkdir -p "$TEST_HOME/.config/sync-ssh" "$TEST_HOME/.local/state"
-    chmod 700 "$TEST_HOME" "$TEST_HOME/.config/sync-ssh" "$TEST_HOME/.local/state"
+    mkdir -p "$TEST_HOME/.config/sshwitch" "$TEST_HOME/.local/state"
+    chmod 700 "$TEST_HOME" "$TEST_HOME/.config/sshwitch" "$TEST_HOME/.local/state"
     export HOME="$TEST_HOME"
     export XDG_CONFIG_HOME="$TEST_HOME/.config"
     export XDG_STATE_HOME="$TEST_HOME/.local/state"
     export GIT_CONFIG_GLOBAL="$TEST_HOME/gitconfig"
     export BW_SESSION="mock-session-token"
-    unset MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
+    unset MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
+    unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH
 }
 
 write_preferences() {
-    mode=$1
+    backend=$1
     signing=${2:-skip}
-    printf "commit_signing=%s\nkeep_alive=skip\nagent_mode=%s\n" "$signing" "$mode" \
-        >"$XDG_CONFIG_HOME/sync-ssh/config"
-    chmod 600 "$XDG_CONFIG_HOME/sync-ssh/config"
+    private_policy="never"
+    [ "$backend" = "disk" ] && private_policy="export"
+    printf "version=2\nprovider=bitwarden\nidentity_backend=%s\nprivate_key_policy=%s\ncommit_signing=%s\nkeep_alive=skip\n" \
+        "$backend" "$private_policy" "$signing" \
+        >"$XDG_CONFIG_HOME/sshwitch/config"
+    chmod 600 "$XDG_CONFIG_HOME/sshwitch/config"
+}
+
+write_legacy_preferences() {
+    mode=$1
+    printf "commit_signing=skip\nkeep_alive=skip\nagent_mode=%s\n" "$mode" \
+        >"$XDG_CONFIG_HOME/sshwitch/config"
+    chmod 600 "$XDG_CONFIG_HOME/sshwitch/config"
 }
 
 run_sync() {
@@ -66,28 +77,111 @@ MOCK_PUBLIC_KEY=$(cat "$key_path.pub")
 MOCK_PRIVATE_KEY=$(cat "$key_path")
 export MOCK_PUBLIC_KEY MOCK_PRIVATE_KEY
 
+new_home provider_contract
+PATH="$REPO_ROOT/tests/mocks:$PATH"
+export PATH
+require_command() { command -v "$1" >/dev/null 2>&1 || fail "Missing provider command: $1"; }
+log_info() { :; }
+die() { fail "$1"; }
+# shellcheck source=../../linux/providers/bitwarden.sh
+. "$REPO_ROOT/linux/providers/bitwarden.sh"
+probe=$(provider_probe)
+printf '%s' "$probe" | jq -e '
+  .protocol_version == 1 and .provider == "bitwarden" and
+  .capabilities.agent == true and .capabilities.private_key_export == true
+' >/dev/null || fail "Provider probe violates protocol version 1"
+provider_requirements
+provider_authenticate
+provider_records="$TEST_HOME/provider-records.json"
+provider_list_records "$provider_records"
+jq -e '
+  .schema_version == 1 and .provider == "bitwarden" and
+  (.records | length == 1) and
+  (.records[0] | has("private_key") | not) and
+  (.records[0].identity | has("private_key") | not)
+' "$provider_records" >/dev/null || fail "Provider list output is not canonical and secret-free"
+if grep -qF -- "$MOCK_PRIVATE_KEY" "$provider_records"; then
+    fail "Provider list output exposed a private key"
+fi
+provider_private="$TEST_HOME/provider-private"
+provider_export_private_key production "$provider_private"
+[ "$(cat "$provider_private")" = "$MOCK_PRIVATE_KEY" ] ||
+    fail "Provider private-key export returned unexpected content"
+pass "Bitwarden adapter conforms to provider protocol version 1"
+
 new_home setup_smoke
 export SHELL=/bin/bash
 printf "s\ns\n2\nexport private keys\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" >/dev/null
-assert_contains "$XDG_CONFIG_HOME/sync-ssh/config" "agent_mode=disk"
-assert_contains "$HOME/.bashrc" '. "$HOME/.ssh/sync-ssh-env.sh"'
-assert_file "$HOME/.ssh/sync-ssh-env.sh"
-pass "interactive setup writes application preferences and one portable profile entry"
+assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "provider=bitwarden"
+assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "identity_backend=disk"
+assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "private_key_policy=export"
+assert_contains "$HOME/.bashrc" '. "$HOME/.ssh/sshwitch-env.sh"'
+assert_file "$HOME/.ssh/sshwitch-env.sh"
+for test_shell in dash bash; do
+    "$test_shell" -c '. "$1"; command -v sshwitch >/dev/null; alias sync-ssh >/dev/null' \
+        sh "$HOME/.ssh/sshwitch-env.sh" ||
+        fail "SSHwitch or legacy shell command was not defined for $test_shell"
+done
+pass "interactive setup writes version 2 preferences and one portable profile entry"
 
 new_home successful_agent_sync
-write_preferences bitwarden
+write_preferences agent
 run_sync
-assert_contains "$HOME/.ssh/config" "Include ~/.ssh/sync-ssh/current/config"
-assert_contains "$HOME/.ssh/sync-ssh/current/config" "Host production"
-assert_file "$HOME/.ssh/sync-ssh/current/keys/production.pub"
-assert_no_file "$HOME/.ssh/sync-ssh/current/keys/production"
+assert_contains "$HOME/.ssh/config" "Include ~/.ssh/sshwitch/current/config"
+assert_contains "$HOME/.ssh/sshwitch/current/config" "Host production"
+assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
+assert_no_file "$HOME/.ssh/sshwitch/current/keys/production"
 ssh -F "$HOME/.ssh/config" -G production >/dev/null
 pass "successful agent sync"
 
-before_hash=$(sha256sum "$HOME/.ssh/sync-ssh/current/config" | awk '{print $1}')
+new_home sync_ssh_brand_migration
+mkdir -p "$XDG_CONFIG_HOME/sync-ssh" "$HOME/.ssh/sync-ssh/current"
+printf "version=2\nprovider=bitwarden\nidentity_backend=agent\nprivate_key_policy=never\ncommit_signing=skip\nkeep_alive=skip\n" \
+    >"$XDG_CONFIG_HOME/sync-ssh/config"
+chmod 600 "$XDG_CONFIG_HOME/sync-ssh/config"
+printf "legacy generation\n" >"$HOME/.ssh/sync-ssh/current/config"
+printf "# Added by Sync-SSH\nInclude ~/.ssh/sync-ssh/current/config\n\nHost manual\n  HostName manual.example\n" \
+    >"$HOME/.ssh/config"
+run_sync
+assert_contains "$HOME/.ssh/config" "# Added by SSHwitch"
+assert_contains "$HOME/.ssh/config" "Include ~/.ssh/sshwitch/current/config"
+assert_contains "$HOME/.ssh/config" "Host manual"
+if grep -qF "Include ~/.ssh/sync-ssh/current/config" "$HOME/.ssh/config"; then
+    fail "Legacy Sync-SSH Include remained after migration"
+fi
+assert_contains "$HOME/.ssh/sync-ssh/current/config" "legacy generation"
+assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
+pass "legacy Sync-SSH preferences and Include migrate after successful validation"
+
+new_home sync_ssh_brand_migration_failure
+mkdir -p "$XDG_CONFIG_HOME/sync-ssh" "$HOME/.ssh/sync-ssh/current"
+printf "version=2\nprovider=bitwarden\nidentity_backend=agent\nprivate_key_policy=never\ncommit_signing=skip\nkeep_alive=skip\n" \
+    >"$XDG_CONFIG_HOME/sync-ssh/config"
+chmod 600 "$XDG_CONFIG_HOME/sync-ssh/config"
+printf "legacy generation\n" >"$HOME/.ssh/sync-ssh/current/config"
+printf "# Added by Sync-SSH\nInclude ~/.ssh/sync-ssh/current/config\n" >"$HOME/.ssh/config"
+legacy_main_hash=$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')
+export MOCK_FAIL_LIST=1
+if run_sync >/dev/null 2>&1; then
+    fail "Failed provider unexpectedly migrated the legacy installation"
+fi
+[ "$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')" = "$legacy_main_hash" ] ||
+    fail "Failed migration changed the active SSH config"
+assert_contains "$HOME/.ssh/sync-ssh/current/config" "legacy generation"
+assert_no_file "$HOME/.ssh/sshwitch/current/config"
+pass "failed provider validation leaves the legacy Sync-SSH generation active"
+
+new_home legacy_preferences
+write_legacy_preferences bitwarden
+run_sync
+assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
+assert_no_file "$HOME/.ssh/sshwitch/current/keys/production"
+pass "legacy agent_mode preferences map to the provider-neutral model"
+
+before_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
 export MOCK_HOSTNAME="dry-run.example.com"
 run_sync --dry-run >/dev/null
-dry_run_hash=$(sha256sum "$HOME/.ssh/sync-ssh/current/config" | awk '{print $1}')
+dry_run_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
 [ "$before_hash" = "$dry_run_hash" ] || fail "Dry run changed the active generation"
 pass "dry run validates without publishing"
 unset MOCK_HOSTNAME
@@ -96,39 +190,57 @@ export MOCK_FAIL_LIST=1
 if run_sync >/dev/null 2>&1; then
     fail "Bitwarden list failure unexpectedly succeeded"
 fi
-after_hash=$(sha256sum "$HOME/.ssh/sync-ssh/current/config" | awk '{print $1}')
+after_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
 [ "$before_hash" = "$after_hash" ] || fail "List failure changed the active generation"
 pass "vault failure leaves active generation unchanged"
 
 unset MOCK_FAIL_LIST
 MOCK_HOSTNAME='example.com
-  ProxyCommand touch /tmp/sync-ssh-injected'
+  ProxyCommand touch /tmp/sshwitch-injected'
 export MOCK_HOSTNAME
 if run_sync >/dev/null 2>&1; then
     fail "Injected HostName unexpectedly succeeded"
 fi
-[ ! -e /tmp/sync-ssh-injected ] || fail "Injected command was executed"
+[ ! -e /tmp/sshwitch-injected ] || fail "Injected command was executed"
 pass "metadata injection is rejected"
 
-mkdir -p "$XDG_STATE_HOME/sync-ssh/sync.lock"
+new_home agent_mismatch
+write_preferences agent
+export MOCK_AGENT_MISMATCH=1
+if run_sync >/dev/null 2>&1; then
+    fail "Agent mismatch unexpectedly succeeded"
+fi
+assert_no_file "$HOME/.ssh/sshwitch/current/config"
+pass "agent identity mismatch fails before publication"
+
+mkdir -p "$XDG_STATE_HOME/sshwitch/sync.lock"
 if run_sync >/dev/null 2>&1; then
     fail "Concurrent lock unexpectedly succeeded"
 fi
-[ -d "$XDG_STATE_HOME/sync-ssh/sync.lock" ] || fail "A failed lock attempt removed another process's lock"
-rmdir "$XDG_STATE_HOME/sync-ssh/sync.lock"
+[ -d "$XDG_STATE_HOME/sshwitch/sync.lock" ] || fail "A failed lock attempt removed another process's lock"
+rmdir "$XDG_STATE_HOME/sshwitch/sync.lock"
 pass "concurrent lock ownership is preserved"
 
 new_home duplicate_alias
-write_preferences bitwarden
+write_preferences agent
 export MOCK_ITEMS_MODE=duplicate
 if run_sync >/dev/null 2>&1; then
     fail "Duplicate alias unexpectedly succeeded"
 fi
-assert_no_file "$HOME/.ssh/sync-ssh/current/config"
+assert_no_file "$HOME/.ssh/sshwitch/current/config"
 pass "duplicate aliases are rejected"
 
+new_home invalid_provider_schema
+write_preferences agent
+export MOCK_ITEMS_MODE=missing-id
+if run_sync >/dev/null 2>&1; then
+    fail "Invalid provider schema unexpectedly succeeded"
+fi
+assert_no_file "$HOME/.ssh/sshwitch/current/config"
+pass "invalid canonical provider records are rejected"
+
 new_home malformed_markers
-write_preferences bitwarden
+write_preferences agent
 mkdir -p "$HOME/.ssh"
 printf "Host manual\n  HostName manual.example\n%s\nmanual-tail\n" \
     "# --- START SYNC-SSH MANAGED SECTION ---" >"$HOME/.ssh/config"
@@ -141,34 +253,34 @@ new_hash=$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')
 pass "malformed markers fail closed"
 
 new_home symlinked_config
-write_preferences bitwarden
+write_preferences agent
 mkdir -p "$HOME/.ssh" "$HOME/dotfiles"
 printf "Host manual\n  HostName manual.example\n" >"$HOME/dotfiles/ssh-config"
 ln -s "$HOME/dotfiles/ssh-config" "$HOME/.ssh/config"
 run_sync
 [ -L "$HOME/.ssh/config" ] || fail "Sync replaced the user's SSH config symlink"
-assert_contains "$HOME/dotfiles/ssh-config" "Include ~/.ssh/sync-ssh/current/config"
+assert_contains "$HOME/dotfiles/ssh-config" "Include ~/.ssh/sshwitch/current/config"
 assert_contains "$HOME/dotfiles/ssh-config" "Host manual"
 pass "symlinked SSH config target is updated without replacing the link"
 
 new_home disk_to_agent
 write_preferences disk
 run_sync
-assert_file "$HOME/.ssh/sync-ssh/current/keys/production"
-write_preferences bitwarden
+assert_file "$HOME/.ssh/sshwitch/current/keys/production"
+write_preferences agent
 run_sync
-assert_no_file "$HOME/.ssh/sync-ssh/current/keys/production"
-assert_file "$HOME/.ssh/sync-ssh/current/keys/production.pub"
+assert_no_file "$HOME/.ssh/sshwitch/current/keys/production"
+assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
 pass "disk-to-agent transition removes managed private keys"
 
 new_home git_signing_restore
-write_preferences bitwarden yes
+write_preferences agent yes
 export MOCK_ITEMS_MODE=git-sign
 git config --global gpg.format openpgp
 run_sync
 [ "$(git config --global gpg.format)" = "ssh" ] || fail "Git signing was not enabled"
 [ "$(git config --global commit.gpgsign)" = "true" ] || fail "Commit signing was not enabled"
-write_preferences bitwarden no
+write_preferences agent no
 run_sync
 [ "$(git config --global gpg.format)" = "openpgp" ] || fail "Previous gpg.format was not restored"
 if git config --global --get commit.gpgsign >/dev/null 2>&1; then

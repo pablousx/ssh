@@ -1,14 +1,21 @@
 #!/bin/sh
 set -eu
 
-ENV_FILE="$HOME/.ssh/sync-ssh-env.sh"
-INSTALL_DIR="$HOME/.local/share/sync-ssh"
-MANAGED_ROOT="$HOME/.ssh/sync-ssh"
+ENV_FILE="$HOME/.ssh/sshwitch-env.sh"
+LEGACY_ENV_FILE="$HOME/.ssh/sync-ssh-env.sh"
+INSTALL_DIR="$HOME/.local/share/sshwitch"
+LEGACY_INSTALL_DIR="$HOME/.local/share/sync-ssh"
+MANAGED_ROOT="$HOME/.ssh/sshwitch"
+LEGACY_MANAGED_ROOT="$HOME/.ssh/sync-ssh"
 MAIN_CONFIG="$HOME/.ssh/config"
-APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sync-ssh"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sync-ssh"
+APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sshwitch"
+LEGACY_APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sync-ssh"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sshwitch"
+LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sync-ssh"
 GIT_STATE_DIR="$STATE_DIR/git"
-INCLUDE_LINE="Include ~/.ssh/sync-ssh/current/config"
+LEGACY_GIT_STATE_DIR="$LEGACY_STATE_DIR/git"
+INCLUDE_LINE="Include ~/.ssh/sshwitch/current/config"
+LEGACY_INCLUDE_LINE="Include ~/.ssh/sync-ssh/current/config"
 START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
 END_MARKER="# --- END SYNC-SSH MANAGED SECTION ---"
 
@@ -37,6 +44,9 @@ safe_replace() {
 restore_git_setting() {
     slug=$1
     state_path="$GIT_STATE_DIR/$slug"
+    if [ ! -d "$state_path" ]; then
+        state_path="$LEGACY_GIT_STATE_DIR/$slug"
+    fi
     [ -d "$state_path" ] || return 0
     command -v git >/dev/null 2>&1 || {
         printf "Git is unavailable; preserving state for manual restoration: %s\n" "$state_path" >&2
@@ -63,11 +73,12 @@ restore_git_setting() {
 }
 
 printf "========================================\n"
-printf "  Sync-SSH Uninstaller\n"
+printf "  SSHwitch Uninstaller\n"
 printf "========================================\n"
 
-if [ -f "$STATE_DIR/bridge.pid" ]; then
-    bridge_pid=$(cat "$STATE_DIR/bridge.pid")
+for bridge_state_dir in "$STATE_DIR" "$LEGACY_STATE_DIR"; do
+    [ -f "$bridge_state_dir/bridge.pid" ] || continue
+    bridge_pid=$(cat "$bridge_state_dir/bridge.pid")
     case "$bridge_pid" in
         *[!0-9]*|"") ;;
         *)
@@ -77,17 +88,21 @@ if [ -f "$STATE_DIR/bridge.pid" ]; then
             fi
             ;;
     esac
-    rm -f "$STATE_DIR/bridge.pid" "$HOME/.bitwarden-ssh-agent.sock"
-fi
+    rm -f "$bridge_state_dir/bridge.pid" "$HOME/.bitwarden-ssh-agent.sock"
+done
 
 printf "Removing shell profile entries...\n"
 for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     [ -f "$profile" ] || continue
-    temp_profile="${profile}.sync-ssh-uninstall.$$"
-    awk -v env_file="$ENV_FILE" '
+    temp_profile="${profile}.sshwitch-uninstall.$$"
+    awk -v env_file="$ENV_FILE" -v legacy_env_file="$LEGACY_ENV_FILE" '
         $0 == "# Added by Bitwarden SSH Sync setup" { next }
+        $0 == "# Added by Sync-SSH setup" { next }
+        $0 == "# Added by SSHwitch setup" { next }
         $0 == ". \"$HOME/.ssh/sync-ssh-env.sh\"" { next }
         $0 == "source " env_file { next }
+        $0 == "source " legacy_env_file { next }
+        $0 == ". \"$HOME/.ssh/sshwitch-env.sh\"" { next }
         { print }
     ' "$profile" >"$temp_profile"
     if ! cmp -s "$profile" "$temp_profile"; then
@@ -98,27 +113,33 @@ for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.prof
     fi
 done
 
-rm -f "$ENV_FILE"
+rm -f "$ENV_FILE" "$LEGACY_ENV_FILE"
 [ ! -d "$INSTALL_DIR" ] || rm -rf -- "$INSTALL_DIR"
+[ ! -d "$LEGACY_INSTALL_DIR" ] || rm -rf -- "$LEGACY_INSTALL_DIR"
 
-if confirm "Remove the generated SSH configuration and keys from $MANAGED_ROOT?"; then
+if confirm "Remove SSHwitch and legacy Sync-SSH generated configuration and keys?"; then
     [ ! -d "$MANAGED_ROOT" ] || rm -rf -- "$MANAGED_ROOT"
+    [ ! -d "$LEGACY_MANAGED_ROOT" ] || rm -rf -- "$LEGACY_MANAGED_ROOT"
     printf "Removed tool-owned SSH files.\n"
 fi
 
-if confirm "Remove the sync-ssh Include line or legacy managed block from $MAIN_CONFIG?"; then
+if confirm "Remove SSHwitch/legacy Sync-SSH Include lines or managed block from $MAIN_CONFIG?"; then
     if [ -f "$MAIN_CONFIG" ]; then
         start_count=$(grep -cF "$START_MARKER" "$MAIN_CONFIG" || true)
         end_count=$(grep -cF "$END_MARKER" "$MAIN_CONFIG" || true)
         if [ "$start_count" -ne "$end_count" ] || [ "$start_count" -gt 1 ]; then
             printf "Malformed legacy markers found; refusing to edit %s.\n" "$MAIN_CONFIG" >&2
         else
-            temp_config="${MAIN_CONFIG}.sync-ssh-uninstall.$$"
-            awk -v include="$INCLUDE_LINE" -v start="$START_MARKER" -v end="$END_MARKER" '
+            temp_config="${MAIN_CONFIG}.sshwitch-uninstall.$$"
+            awk -v include="$INCLUDE_LINE" -v legacy_include="$LEGACY_INCLUDE_LINE" \
+                -v start="$START_MARKER" -v end="$END_MARKER" '
                 $0 == start { skip=1; next }
                 $0 == end && skip { skip=0; next }
                 $0 == include { next }
+                $0 == legacy_include { next }
                 $0 == "# Added by Bitwarden SSH Sync" { next }
+                $0 == "# Added by Sync-SSH" { next }
+                $0 == "# Added by SSHwitch" { next }
                 !skip { print }
                 END { if (skip) exit 42 }
             ' "$MAIN_CONFIG" >"$temp_config" || {
@@ -132,7 +153,7 @@ if confirm "Remove the sync-ssh Include line or legacy managed block from $MAIN_
     fi
 fi
 
-if confirm "Restore Git settings previously changed by Sync-SSH?"; then
+if confirm "Restore Git settings previously changed by SSHwitch?"; then
     restore_git_setting allowed-signers-file
     restore_git_setting commit-gpgsign
     restore_git_setting user-signingkey
@@ -147,8 +168,13 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 [ ! -d "$APP_CONFIG_DIR" ] || rm -rf -- "$APP_CONFIG_DIR"
+[ ! -d "$LEGACY_APP_CONFIG_DIR" ] || rm -rf -- "$LEGACY_APP_CONFIG_DIR"
 if [ -d "$STATE_DIR" ] && [ -z "$(find "$STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
     rmdir "$STATE_DIR"
 fi
+if [ -d "$LEGACY_STATE_DIR" ] &&
+    [ -z "$(find "$LEGACY_STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    rmdir "$LEGACY_STATE_DIR"
+fi
 
-printf "\nSync-SSH has been uninstalled. Restart your shell to remove loaded functions.\n"
+printf "\nSSHwitch has been uninstalled. Restart your shell to remove loaded functions.\n"

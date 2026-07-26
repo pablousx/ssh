@@ -2,6 +2,36 @@
 
 All notable changes are documented here. Versions follow Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Versioned, secret-free provider record schema and Bitwarden adapters for
+  Linux/WSL and Windows.
+- Provider capability probing and conformance tests for schema enforcement,
+  secret exclusion, CLI failure, alias collisions, metadata injection, and
+  agent identity matching.
+- `SSHwitchRole=git-sign` as a provider-neutral signing-role marker.
+
+### Changed
+
+- Renamed the project, commands, owned paths, and release archives from
+  Sync-SSH to SSHwitch, with migration for existing preferences, Git state,
+  profile entries, generated Include directives, and the legacy command.
+- Preferences now separate `provider`, `identity_backend`, and
+  `private_key_policy`; legacy `agent_mode` values remain compatible.
+- Bitwarden authentication and record mapping moved out of the validation and
+  publication core.
+- Agent mode now fails before publication when a provider key is absent from
+  the selected SSH agent.
+- Generated comments use the provider-neutral SSHwitch name.
+
+### Security
+
+- Canonical provider records cannot contain private-key fields.
+- Private-key retrieval is a separate capability invoked only by the explicit
+  `disk`/`export` configuration.
+
 ## [1.0.0] - 2026-07-24
 
 ### Added

@@ -2,16 +2,16 @@
 
 ## Project purpose
 
-Bitwarden SSH Sync generates validated OpenSSH configuration from Bitwarden SSH
-key items on Linux, WSL, and Windows. The repository intentionally maintains two
-platform implementations:
+SSHwitch generates validated OpenSSH configuration from provider-managed SSH
+records on Linux, WSL, and Windows. Bitwarden is the first built-in provider.
+The repository intentionally maintains two platform implementations:
 
 - POSIX shell: `install.sh`, `uninstall.sh`, and `linux/`
 - Windows PowerShell 5.1/PowerShell 7: `install.ps1`, `uninstall.ps1`, and
   `windows/`
 
-Changes to synchronization, preferences, Git signing, installation, or
-uninstallation normally require equivalent behavior and tests on both
+Changes to providers, synchronization, preferences, Git signing, installation,
+or uninstallation normally require equivalent behavior and tests on both
 platforms.
 
 ## Skills to use
@@ -35,16 +35,17 @@ native Windows process.
 
 Preserve all of these invariants:
 
-1. **Fail closed.** A Bitwarden, JSON, validation, SSH, Git, or filesystem
+1. **Fail closed.** A provider, JSON, validation, SSH, Git, or filesystem
    failure must not replace the active SSH generation.
 2. **Stage before publishing.** Build and validate a complete generation before
    changing active files. Preserve rollback behavior around publication.
 3. **Own a narrow namespace.** Generated files belong under
-   `~/.ssh/sync-ssh/`. Never recursively manage or delete generic directories
+   `~/.ssh/sshwitch/`. Never recursively manage or delete generic directories
    such as `~/.ssh/keys`.
-4. **Agent mode writes no private keys.** Private-key fields may exist only in
-   memory in agent mode. They must not enter temporary files, manifests, logs,
-   or test output.
+4. **Agent mode writes no private keys.** A provider CLI response may contain
+   private-key fields only in adapter memory. Canonical provider records are
+   secret-free, and private-key fields must not enter temporary files,
+   manifests, logs, or test output.
 5. **Disk mode is explicit.** It requires deliberate confirmation and writes
    private keys only into the restricted, tool-owned generation.
 6. **Validate vault input.** Reject control characters, unsafe whitespace,
@@ -56,7 +57,7 @@ Preserve all of these invariants:
 8. **Respect lock ownership.** A process that failed to acquire a lock must
    never remove another process's lock.
 9. **Own Git changes.** Save the prior global Git value and restore it only when
-   the current value still matches the value written by Sync-SSH.
+   the current value still matches the value written by SSHwitch.
 10. **Never expose secrets.** Do not print vault JSON, session tokens, private
     keys, or generated secret-bearing paths in debug traces or CI logs.
 
@@ -65,13 +66,13 @@ Preserve all of these invariants:
 The main SSH config contains:
 
 ```sshconfig
-Include ~/.ssh/sync-ssh/current/config
+Include ~/.ssh/sshwitch/current/config
 ```
 
 The active generation is replaced as a unit:
 
 ```text
-~/.ssh/sync-ssh/
+~/.ssh/sshwitch/
 └── current/
     ├── config
     ├── keys/
@@ -83,11 +84,15 @@ Preferences are application state, not Git configuration:
 
 | Platform | Preferences | State |
 |---|---|---|
-| Linux/WSL | `${XDG_CONFIG_HOME:-~/.config}/sync-ssh/config` | `${XDG_STATE_HOME:-~/.local/state}/sync-ssh/` |
-| Windows | `%APPDATA%\sync-ssh\config.json` | `%LOCALAPPDATA%\sync-ssh-state\` |
+| Linux/WSL | `${XDG_CONFIG_HOME:-~/.config}/sshwitch/config` | `${XDG_STATE_HOME:-~/.local/state}/sshwitch/` |
+| Windows | `%APPDATA%\sshwitch\config.json` | `%LOCALAPPDATA%\sshwitch-state\` |
 
 Legacy `sync-ssh.*` Git keys are migration inputs only. Do not reintroduce them
 as the primary preference store.
+
+Current preferences separate `provider`, `identity_backend`, and
+`private_key_policy`. Only `agent`/`never` and `disk`/`export` combinations are
+valid. Legacy `agent_mode` is a migration input only.
 
 ## Cross-platform parity
 
@@ -98,9 +103,11 @@ Keep these behaviors aligned:
 | Alias normalization | lowercase and replace outside `[a-z0-9._-]` | same |
 | Metadata fields | case-insensitive `HostName`, `User`, `Email`/`GitEmail` | same |
 | Item ordering | deterministic, case-insensitive name sort | same |
-| Modes | `bitwarden`, `disk` | same |
+| Provider | `bitwarden` | same |
+| Identity backends | `agent`, `disk` | same |
+| Private-key policies | `never`, `export` | same |
 | Preference values | `yes`, `no`, `skip` | same |
-| Generated identity path | `~/.ssh/sync-ssh/current/keys/...` | same |
+| Generated identity path | `~/.ssh/sshwitch/current/keys/...` | same |
 | Git signing keys | four owned global settings | same |
 | Failure status | nonzero and active generation preserved | same |
 | Dry run | validates without publishing | same |
@@ -147,7 +154,7 @@ implementation has the same bug. Add a parity regression test when practical.
 - Do not interpolate attacker-controlled `${{ }}` expressions directly into
   `run:` blocks.
 - Keep release artifacts deterministic in structure:
-  `sync-ssh-vX.Y.Z.tar.gz` and `.zip`, each with a matching `.sha256`.
+  `sshwitch-vX.Y.Z.tar.gz` and `.zip`, each with a matching `.sha256`.
 - `VERSION` contains `X.Y.Z`; release tags are `vX.Y.Z` and must match it.
 - Do not commit, tag, push, or publish a release unless the user explicitly
   authorizes that repository/release action.
@@ -160,11 +167,14 @@ Run the relevant subset during iteration and the full set before handoff.
 
 ```sh
 dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  tests/linux/run.sh tests/mocks/bw
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/ssh-add
 bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  tests/linux/run.sh tests/mocks/bw
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/ssh-add
 shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  tests/linux/run.sh tests/mocks/bw
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/ssh-add
 tests/linux/run.sh
 ```
 
@@ -177,7 +187,7 @@ Run in both Windows PowerShell 5.1 and PowerShell 7:
 
 ```powershell
 Invoke-ScriptAnalyzer -Path . -Recurse
-Invoke-Pester tests/powershell/Sync.Tests.ps1
+Invoke-Pester tests/powershell/SSHwitch.Tests.ps1
 ```
 
 At minimum, parse every `.ps1` file with
@@ -198,6 +208,9 @@ Also parse changed workflow YAML and review workflow changes using
 Add or update tests for any behavior change. High-value cases include:
 
 - Bitwarden sync/list failure leaves the active generation unchanged.
+- Provider capability or canonical-schema violations fail before publication.
+- Agent identities must match the provider public keys before publication.
+- Agent-mode canonical records and tests never contain private-key material.
 - Invalid JSON and empty/missing fields fail safely.
 - Newline or directive injection is rejected.
 - Duplicate normalized aliases are rejected.

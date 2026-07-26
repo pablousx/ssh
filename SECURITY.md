@@ -15,22 +15,33 @@ Include:
 
 ## Security model
 
-Sync-SSH treats the local Bitwarden CLI and the user's unlocked vault as trusted.
-Vault metadata is still validated before it is written to OpenSSH configuration.
-Generated files are staged, validated, and published only after all required
-commands succeed.
+SSHwitch treats the selected local provider adapter, its CLI, and the user's
+unlocked provider store as trusted. Provider output is still required to match
+the versioned canonical schema before metadata is written to OpenSSH
+configuration. The schema is secret-free and rejects extra fields, including
+private-key fields. Generated files are staged, validated, and published only
+after all required commands succeed.
 
-Agent mode does not write private keys to disk. Disk mode intentionally exports
-private keys into the tool-owned directory and requires an explicit setup
-confirmation. Switching back to agent mode replaces the complete generation and
-removes those managed private-key files.
+Agent mode does not invoke the provider's private-key export capability or
+write private keys. A native provider CLI may return a secret-bearing response
+to its adapter; the adapter must keep it in memory and strip private fields
+before crossing the canonical-record boundary. Agent mode also verifies that
+each provider public key is available from the selected agent before
+publication. The disk identity backend invokes a separate provider export
+capability, intentionally writes private keys into the tool-owned generation,
+and requires an explicit setup confirmation. Switching back to agent mode
+replaces the complete generation and removes those managed private-key files.
 
 The project owns only:
 
-- `~/.ssh/sync-ssh/`;
-- its exact `Include ~/.ssh/sync-ssh/current/config` line;
+- `~/.ssh/sshwitch/`;
+- its exact `Include ~/.ssh/sshwitch/current/config` line;
 - its application preference and state directories;
 - Git settings for which it has recorded previous values.
+
+During migration, the prior `sync-ssh` preference, state, installation, profile,
+and generated directories are also treated as narrowly owned legacy paths.
+SSHwitch recognizes only the exact former Include and marker strings.
 
 Installers verify release archive checksums. Users with stricter supply-chain
 requirements should download a release and checksum separately, inspect the

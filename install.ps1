@@ -1,12 +1,19 @@
 $ErrorActionPreference = "Stop"
 
-$version = if ($env:SYNC_SSH_VERSION) { $env:SYNC_SSH_VERSION } else { "v1.0.0" }
+$version = if ($env:SSHWITCH_VERSION) {
+    $env:SSHWITCH_VERSION
+} elseif ($env:SYNC_SSH_VERSION) {
+    $env:SYNC_SSH_VERSION
+} else {
+    "v1.0.0"
+}
 $repository = "pablousx/ssh"
-$installDir = Join-Path $env:LOCALAPPDATA "sync-ssh"
+$installDir = Join-Path $env:LOCALAPPDATA "sshwitch"
+$legacyInstallDir = Join-Path $env:LOCALAPPDATA "sync-ssh"
 $installParent = Split-Path $installDir -Parent
-$backupDir = Join-Path $installParent ".sync-ssh.previous"
-$newInstall = Join-Path $installParent (".sync-ssh.new." + [Guid]::NewGuid().ToString("N"))
-$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("sync-ssh-" + [Guid]::NewGuid().ToString("N"))
+$backupDir = Join-Path $installParent ".sshwitch.previous"
+$newInstall = Join-Path $installParent (".sshwitch.new." + [Guid]::NewGuid().ToString("N"))
+$temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("sshwitch-" + [Guid]::NewGuid().ToString("N"))
 
 if ((Get-ExecutionPolicy) -eq "Restricted") {
     throw "Execution policy is Restricted. Use RemoteSigned for CurrentUser, then retry."
@@ -14,12 +21,12 @@ if ((Get-ExecutionPolicy) -eq "Restricted") {
 
 try {
     [System.IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
-    $archiveName = "sync-ssh-$version.zip"
+    $archiveName = "sshwitch-$version.zip"
     $releaseUrl = "https://github.com/$repository/releases/download/$version"
     $archivePath = Join-Path $temporaryRoot $archiveName
     $checksumPath = "$archivePath.sha256"
 
-    Write-Host "Downloading Sync-SSH $version..." -ForegroundColor Cyan
+    Write-Host "Downloading SSHwitch $version..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri "$releaseUrl/$archiveName" -OutFile $archivePath -UseBasicParsing
     Invoke-WebRequest -Uri "$releaseUrl/$archiveName.sha256" -OutFile $checksumPath -UseBasicParsing
     $expected = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
@@ -29,16 +36,22 @@ try {
     }
 
     Expand-Archive -LiteralPath $archivePath -DestinationPath $temporaryRoot -Force
-    $packageRoot = Join-Path $temporaryRoot "sync-ssh"
+    $packageRoot = Join-Path $temporaryRoot "sshwitch"
     $setupSource = Join-Path $packageRoot "windows\setup.ps1"
     $syncSource = Join-Path $packageRoot "windows\sync.ps1"
-    if (-not (Test-Path -LiteralPath $setupSource) -or -not (Test-Path -LiteralPath $syncSource)) {
+    $providerSource = Join-Path $packageRoot "windows\providers\bitwarden.ps1"
+    if (-not (Test-Path -LiteralPath $setupSource) -or
+        -not (Test-Path -LiteralPath $syncSource) -or
+        -not (Test-Path -LiteralPath $providerSource)) {
         throw "Release archive is missing Windows scripts."
     }
 
     [System.IO.Directory]::CreateDirectory($newInstall) | Out-Null
     Copy-Item -LiteralPath $setupSource -Destination (Join-Path $newInstall "setup.ps1")
     Copy-Item -LiteralPath $syncSource -Destination (Join-Path $newInstall "sync.ps1")
+    $providerDestination = Join-Path $newInstall "providers"
+    [System.IO.Directory]::CreateDirectory($providerDestination) | Out-Null
+    Copy-Item -LiteralPath $providerSource -Destination (Join-Path $providerDestination "bitwarden.ps1")
     [System.IO.File]::WriteAllText(
         (Join-Path $newInstall "VERSION"),
         "$version`n",
@@ -66,7 +79,10 @@ try {
     if (Test-Path -LiteralPath $backupDir) {
         Remove-Item -LiteralPath $backupDir -Recurse -Force
     }
-    Write-Host "Installed Sync-SSH $version." -ForegroundColor Green
+    if (Test-Path -LiteralPath $legacyInstallDir) {
+        Remove-Item -LiteralPath $legacyInstallDir -Recurse -Force
+    }
+    Write-Host "Installed SSHwitch $version." -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $temporaryRoot) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force

@@ -17,10 +17,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq shellcheck
       - name: Check POSIX and Bash syntax
         run: |
-          dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
-          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
+          dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
+          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
       - name: Run ShellCheck
-        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh tests/linux/run.sh tests/mocks/bw
+        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
       - name: Run Linux integration tests
         run: tests/linux/run.sh
 
@@ -61,5 +61,5 @@ jobs:
       - name: Run PowerShell tests
         shell: ${{ matrix.shell }}
         run: |
-          $result = Invoke-Pester tests/powershell/Sync.Tests.ps1 -PassThru
+          $result = Invoke-Pester tests/powershell/SSHwitch.Tests.ps1 -PassThru
           if ($result.FailedCount -gt 0) { exit 1 }

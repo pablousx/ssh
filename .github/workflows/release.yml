@@ -18,12 +18,12 @@ jobs:
           test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
       - name: Build release archives
         run: |
-          mkdir -p dist/sync-ssh
-          cp -R linux windows README.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sync-ssh/
-          tar -C dist -czf "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz" sync-ssh
-          (cd dist && zip -qr "sync-ssh-${GITHUB_REF_NAME}.zip" sync-ssh)
-          (cd dist && sha256sum "sync-ssh-${GITHUB_REF_NAME}.tar.gz" > "sync-ssh-${GITHUB_REF_NAME}.tar.gz.sha256")
-          (cd dist && sha256sum "sync-ssh-${GITHUB_REF_NAME}.zip" > "sync-ssh-${GITHUB_REF_NAME}.zip.sha256")
+          mkdir -p dist/sshwitch
+          cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
+          tar -C dist -czf "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz" sshwitch
+          (cd dist && zip -qr "sshwitch-${GITHUB_REF_NAME}.zip" sshwitch)
+          (cd dist && sha256sum "sshwitch-${GITHUB_REF_NAME}.tar.gz" > "sshwitch-${GITHUB_REF_NAME}.tar.gz.sha256")
+          (cd dist && sha256sum "sshwitch-${GITHUB_REF_NAME}.zip" > "sshwitch-${GITHUB_REF_NAME}.zip.sha256")
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -31,7 +31,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --verify-tag \
             --generate-notes \
-            "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz" \
-            "dist/sync-ssh-${GITHUB_REF_NAME}.tar.gz.sha256" \
-            "dist/sync-ssh-${GITHUB_REF_NAME}.zip" \
-            "dist/sync-ssh-${GITHUB_REF_NAME}.zip.sha256"
+            "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz" \
+            "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz.sha256" \
+            "dist/sshwitch-${GITHUB_REF_NAME}.zip" \
+            "dist/sshwitch-${GITHUB_REF_NAME}.zip.sha256"
