@@ -45,3 +45,12 @@ and add a failure-path regression test instead.
 - Uninstall must remove only files and settings owned by SSHwitch.
 
 Update `CHANGELOG.md` for user-visible changes.
+
+## Releases
+
+Set `VERSION` to the next `X.Y.Z` value and finalize that version's changelog
+entry in the same commit. When the commit reaches `main`, the release workflow
+creates the matching immutable `vX.Y.Z` tag, archives, checksums, and GitHub
+release. The installer and uninstaller scripts are attached to the release, and
+its notes prepend exact version-pinned installation commands. If that release
+already exists, the workflow exits without republishing it or moving its tag.

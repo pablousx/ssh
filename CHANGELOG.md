@@ -4,6 +4,8 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-27
+
 ### Added
 
 - macOS support through the shared POSIX installer, setup, sync, and uninstall
@@ -18,6 +20,11 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ### Changed
 
+- Releases are now created automatically from a new `VERSION` pushed to `main`,
+  including the matching `vX.Y.Z` tag and checksum files.
+- Release assets now include the POSIX and Windows installer/uninstaller
+  scripts, stable latest-release URLs, and version-pinned installation commands
+  in each release's generated notes.
 - Renamed the project, commands, owned paths, and release archives from
   Sync-SSH to SSHwitch, with migration for existing preferences, Git state,
   profile entries, generated Include directives, and the legacy command.

@@ -135,26 +135,27 @@ stage it, and restore the previous installation if setup fails.
 ### Linux, macOS, and WSL
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/install.sh | sh
+curl -fsSL https://github.com/pablousx/sshwitch/releases/latest/download/install.sh | sh
 ```
 
-To install a different release with a downloaded installer:
+This installs the latest published release. To pin a specific release, replace
+`vX.Y.Z` with the version you want:
 
 ```sh
-SSHWITCH_VERSION=v1.1.0 sh install.sh
+curl -fsSL https://github.com/pablousx/sshwitch/releases/download/vX.Y.Z/install.sh | sh
 ```
 
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/install.ps1 | iex
+irm https://github.com/pablousx/sshwitch/releases/latest/download/install.ps1 | iex
 ```
 
-To select another release:
+This installs the latest published release. To pin a specific release, replace
+`vX.Y.Z` with the version you want:
 
 ```powershell
-$env:SSHWITCH_VERSION = "v1.1.0"
-.\install.ps1
+irm https://github.com/pablousx/sshwitch/releases/download/vX.Y.Z/install.ps1 | iex
 ```
 
 If the execution policy is `Restricted`, review the scripts and use an
@@ -294,13 +295,13 @@ editing the file.
 Linux, macOS, and WSL:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/uninstall.sh | sh
+curl -fsSL https://github.com/pablousx/sshwitch/releases/latest/download/uninstall.sh | sh
 ```
 
 Windows:
 
 ```powershell
-irm https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/uninstall.ps1 | iex
+irm https://github.com/pablousx/sshwitch/releases/latest/download/uninstall.ps1 | iex
 ```
 
 The uninstallers ask before removing generated SSH files, the include/legacy
@@ -349,9 +350,12 @@ CI covers the shared POSIX implementation on Linux and macOS, including `dash`
 and Bash syntax checks on Linux, plus Windows PowerShell 5.1, PowerShell 7,
 PSScriptAnalyzer, and Pester.
 
-Releases are created from `v*` tags. The tag must match `VERSION`; the workflow
-publishes `.tar.gz` and `.zip` packages plus SHA-256 files consumed by the
-installers.
+When a new `VERSION` reaches `main`, the release workflow creates the matching
+`vX.Y.Z` tag and publishes `.tar.gz` and `.zip` packages plus SHA-256 files
+consumed by the installers. Installer and uninstaller scripts are attached as
+release assets, and the release notes include version-pinned POSIX and Windows
+installation commands. Pushes keep succeeding without republishing when that
+version already has a release.
 
 ## License
 

@@ -5,7 +5,7 @@ $version = if ($env:SSHWITCH_VERSION) {
 } elseif ($env:SYNC_SSH_VERSION) {
     $env:SYNC_SSH_VERSION
 } else {
-    "v1.0.0"
+    "v1.1.0"
 }
 $repository = "pablousx/sshwitch"
 $installDir = Join-Path $env:LOCALAPPDATA "sshwitch"

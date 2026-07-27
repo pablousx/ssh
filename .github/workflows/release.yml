@@ -2,36 +2,141 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Verify version
-        run: |
-          test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
-      - name: Build release archives
-        run: |
-          mkdir -p dist/sshwitch
-          cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
-          tar -C dist -czf "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz" sshwitch
-          (cd dist && zip -qr "sshwitch-${GITHUB_REF_NAME}.zip" sshwitch)
-          (cd dist && sha256sum "sshwitch-${GITHUB_REF_NAME}.tar.gz" > "sshwitch-${GITHUB_REF_NAME}.tar.gz.sha256")
-          (cd dist && sha256sum "sshwitch-${GITHUB_REF_NAME}.zip" > "sshwitch-${GITHUB_REF_NAME}.zip.sha256")
-      - name: Create GitHub release
+        with:
+          fetch-depth: 0
+      - name: Prepare release
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          version=$(cat VERSION) || {
+            printf 'Unable to read VERSION.\n' >&2
+            exit 1
+          }
+          if ! printf '%s\n' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            printf 'VERSION must contain X.Y.Z, got: %s\n' "${version}" >&2
+            exit 1
+          fi
+
+          tag_name="v${version}"
+          printf 'tag=%s\n' "${tag_name}" >>"${GITHUB_OUTPUT}"
+
+          if gh release view "${tag_name}" >/dev/null 2>&1; then
+            printf 'release=false\n' >>"${GITHUB_OUTPUT}"
+            printf 'Release %s already exists; nothing to publish.\n' "${tag_name}"
+            exit 0
+          fi
+
+          remote_main_line=$(git ls-remote origin refs/heads/main) || {
+            printf 'Unable to resolve the current main commit.\n' >&2
+            exit 1
+          }
+          remote_main=$(printf '%s\n' "${remote_main_line}" | awk 'NR == 1 { print $1 }')
+          if [ -z "${remote_main}" ]; then
+            printf 'The main branch did not resolve to a commit.\n' >&2
+            exit 1
+          fi
+          if [ "${remote_main}" != "${GITHUB_SHA}" ]; then
+            printf 'release=false\n' >>"${GITHUB_OUTPUT}"
+            printf 'A newer main commit exists; leaving release creation to that run.\n'
+            exit 0
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
+            tagged_commit=$(git rev-list -n 1 "${tag_name}")
+            if [ "${tagged_commit}" != "${GITHUB_SHA}" ]; then
+              printf 'Tag %s exists without a release at another commit.\n' "${tag_name}" >&2
+              exit 1
+            fi
+            printf 'create_tag=false\n' >>"${GITHUB_OUTPUT}"
+          else
+            printf 'create_tag=true\n' >>"${GITHUB_OUTPUT}"
+          fi
+          printf 'release=true\n' >>"${GITHUB_OUTPUT}"
+      - name: Build release archives
+        if: steps.prepare.outputs.release == 'true'
+        env:
+          TAG_NAME: ${{ steps.prepare.outputs.tag }}
+        run: |
+          mkdir -p dist/sshwitch
+          cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
+          tar -C dist -czf "dist/sshwitch-${TAG_NAME}.tar.gz" sshwitch
+          (cd dist && zip -qr "sshwitch-${TAG_NAME}.zip" sshwitch)
+          (cd dist && sha256sum "sshwitch-${TAG_NAME}.tar.gz" > "sshwitch-${TAG_NAME}.tar.gz.sha256")
+          (cd dist && sha256sum "sshwitch-${TAG_NAME}.zip" > "sshwitch-${TAG_NAME}.zip.sha256")
+      - name: Confirm release commit
+        if: steps.prepare.outputs.release == 'true'
+        id: confirm
+        run: |
+          remote_main_line=$(git ls-remote origin refs/heads/main) || {
+            printf 'Unable to recheck the current main commit.\n' >&2
+            exit 1
+          }
+          remote_main=$(printf '%s\n' "${remote_main_line}" | awk 'NR == 1 { print $1 }')
+          if [ -z "${remote_main}" ]; then
+            printf 'The main branch did not resolve to a commit.\n' >&2
+            exit 1
+          fi
+          if [ "${remote_main}" = "${GITHUB_SHA}" ]; then
+            printf 'publish=true\n' >>"${GITHUB_OUTPUT}"
+          else
+            printf 'publish=false\n' >>"${GITHUB_OUTPUT}"
+            printf 'A newer main commit arrived while building; skipping this release.\n'
+          fi
+      - name: Create release tag
+        if: steps.prepare.outputs.create_tag == 'true' && steps.confirm.outputs.publish == 'true'
+        env:
+          TAG_NAME: ${{ steps.prepare.outputs.tag }}
+        run: |
+          git tag "${TAG_NAME}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG_NAME}"
+      - name: Create GitHub release
+        if: steps.prepare.outputs.release == 'true' && steps.confirm.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.prepare.outputs.tag }}
+        run: |
+          {
+            printf '## Install this release\n\n'
+            printf 'Linux, macOS, and WSL:\n\n'
+            printf '```sh\n'
+            printf 'curl -fsSL https://github.com/%s/releases/download/%s/install.sh | sh\n' \
+              "${GITHUB_REPOSITORY}" "${TAG_NAME}"
+            printf '```\n\n'
+            printf 'Windows PowerShell:\n\n'
+            printf '```powershell\n'
+            printf 'irm https://github.com/%s/releases/download/%s/install.ps1 | iex\n' \
+              "${GITHUB_REPOSITORY}" "${TAG_NAME}"
+            printf '```\n\n'
+          } >dist/release-notes.md
+          release_notes=$(cat dist/release-notes.md) || {
+            printf 'Unable to read generated release instructions.\n' >&2
+            exit 1
+          }
+          gh release create "${TAG_NAME}" \
             --verify-tag \
             --generate-notes \
-            "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz" \
-            "dist/sshwitch-${GITHUB_REF_NAME}.tar.gz.sha256" \
-            "dist/sshwitch-${GITHUB_REF_NAME}.zip" \
-            "dist/sshwitch-${GITHUB_REF_NAME}.zip.sha256"
+            --notes "${release_notes}" \
+            install.sh \
+            install.ps1 \
+            uninstall.sh \
+            uninstall.ps1 \
+            "dist/sshwitch-${TAG_NAME}.tar.gz" \
+            "dist/sshwitch-${TAG_NAME}.tar.gz.sha256" \
+            "dist/sshwitch-${TAG_NAME}.zip" \
+            "dist/sshwitch-${TAG_NAME}.zip.sha256"

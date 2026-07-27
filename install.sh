@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-v1.0.0}}"
+VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-v1.1.0}}"
 REPOSITORY="pablousx/sshwitch"
 INSTALL_PARENT="$HOME/.local/share"
 INSTALL_DIR="$INSTALL_PARENT/sshwitch"

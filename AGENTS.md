@@ -156,7 +156,12 @@ implementation has the same bug. Add a parity regression test when practical.
   `run:` blocks.
 - Keep release artifacts deterministic in structure:
   `sshwitch-vX.Y.Z.tar.gz` and `.zip`, each with a matching `.sha256`.
+- Attach `install.sh`, `install.ps1`, `uninstall.sh`, and `uninstall.ps1` to
+  every release, and prepend exact version-pinned POSIX and Windows install
+  commands to the generated release notes.
 - `VERSION` contains `X.Y.Z`; release tags are `vX.Y.Z` and must match it.
+- A new `VERSION` on `main` automatically creates its immutable matching tag
+  and release. Existing releases must be skipped without moving their tags.
 - Do not commit, tag, push, or publish a release unless the user explicitly
   authorizes that repository/release action.
 

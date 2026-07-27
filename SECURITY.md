@@ -43,9 +43,13 @@ During migration, the prior `sync-ssh` preference, state, installation, profile,
 and generated directories are also treated as narrowly owned legacy paths.
 SSHwitch recognizes only the exact former Include and marker strings.
 
-Installers verify release archive checksums. Users with stricter supply-chain
-requirements should download a release and checksum separately, inspect the
-scripts, and run the platform setup script locally.
+Installers verify release archive checksums. A push to `main` with a new,
+validated `VERSION` causes the release workflow to build the archives and
+checksums, create the matching `vX.Y.Z` tag, and publish the release with the
+installer scripts as immutable release assets. Existing versions are not
+republished. Users with stricter supply-chain requirements should download a
+release and checksum separately, inspect the scripts, and run the platform
+setup script locally.
 
 ## Supported versions
 

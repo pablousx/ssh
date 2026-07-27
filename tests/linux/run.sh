@@ -138,8 +138,8 @@ export MOCK_CURL_FAILURE=1
 if installer_output=$(sh "$REPO_ROOT/install.sh" 2>&1); then
     fail "Installer unexpectedly succeeded with a failed download"
 fi
-printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch" ||
-    fail "Installer rejected macOS before attempting the release download"
+printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch v1.1.0" ||
+    fail "Installer rejected macOS or selected the wrong default release"
 if printf '%s' "$installer_output" | grep -qF "supports Linux"; then
     fail "Installer reported macOS as unsupported"
 fi
