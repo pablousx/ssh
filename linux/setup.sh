@@ -2,12 +2,25 @@
 set -eu
 
 IS_WSL=false
-OS_NAME="Linux"
-if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] ||
-    { [ -f /proc/version ] && grep -qi microsoft /proc/version; }; then
-    IS_WSL=true
-    OS_NAME="Linux (WSL: ${WSL_DISTRO_NAME:-unknown})"
-fi
+IS_MACOS=false
+case "$(uname -s)" in
+    Linux)
+        OS_NAME="Linux"
+        if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] ||
+            { [ -f /proc/version ] && grep -qi microsoft /proc/version; }; then
+            IS_WSL=true
+            OS_NAME="Linux (WSL: ${WSL_DISTRO_NAME:-unknown})"
+        fi
+        ;;
+    Darwin)
+        IS_MACOS=true
+        OS_NAME="macOS"
+        ;;
+    *)
+        printf "This setup supports Linux, WSL, and macOS only.\n" >&2
+        exit 1
+        ;;
+esac
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 if [ "$SCRIPT_DIR" = "$HOME/.local/share/sshwitch" ]; then
@@ -25,6 +38,19 @@ LEGACY_PREFERENCES_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/sync-ssh/config"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sshwitch"
 LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sync-ssh"
 DEFAULT_BW_SOCK="$HOME/.bitwarden-ssh-agent.sock"
+MAC_APP_STORE_BW_SOCK="$HOME/Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock"
+
+preserve_mode() {
+    source_file=$1
+    destination_file=$2
+    if source_mode=$(stat -c '%a' "$source_file" 2>/dev/null); then
+        chmod "$source_mode" "$destination_file"
+    elif source_mode=$(stat -f '%Lp' "$source_file" 2>/dev/null); then
+        chmod "$source_mode" "$destination_file"
+    else
+        chmod 600 "$destination_file"
+    fi
+}
 
 read_preference() {
     key=$1
@@ -269,7 +295,25 @@ identity_backend=\$(awk -F= '\$1 == "identity_backend" { print \$2; exit }' "$PR
 legacy_agent_mode=\$(awk -F= '\$1 == "agent_mode" { print \$2; exit }' "$PREFERENCES_FILE")
 if [ "\$identity_backend" = "agent" ] ||
     { [ -z "\$identity_backend" ] && [ "\$legacy_agent_mode" = "bitwarden" ]; }; then
+EOF
+    if [ "$IS_MACOS" = true ]; then
+        cat >>"$env_temp" <<EOF
+    if [ -S "$MAC_APP_STORE_BW_SOCK" ]; then
+        export SSH_AUTH_SOCK="$MAC_APP_STORE_BW_SOCK"
+    elif [ -S "$DEFAULT_BW_SOCK" ]; then
+        export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
+    elif [ -d "$HOME/Library/Containers/com.bitwarden.desktop" ]; then
+        export SSH_AUTH_SOCK="$MAC_APP_STORE_BW_SOCK"
+    else
+        export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
+    fi
+EOF
+    else
+        cat >>"$env_temp" <<EOF
     export SSH_AUTH_SOCK="$DEFAULT_BW_SOCK"
+EOF
+    fi
+    cat >>"$env_temp" <<EOF
 fi
 
 sshwitch() {
@@ -298,7 +342,7 @@ awk -v legacy_source="$LEGACY_SOURCE_LINE" '
     { print }
 ' "$PROFILE" >"$profile_temp"
 if ! cmp -s "$PROFILE" "$profile_temp"; then
-    chmod --reference="$PROFILE" "$profile_temp" 2>/dev/null || chmod 600 "$profile_temp"
+    preserve_mode "$PROFILE" "$profile_temp"
     mv "$profile_temp" "$PROFILE"
 else
     rm -f "$profile_temp"

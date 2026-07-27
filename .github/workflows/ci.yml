@@ -17,11 +17,26 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq shellcheck
       - name: Check POSIX and Bash syntax
         run: |
-          dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
-          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
+          dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
+          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
       - name: Run ShellCheck
-        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
-      - name: Run Linux integration tests
+        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
+      - name: Run POSIX integration tests
+        run: tests/linux/run.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install validation tools
+        run: brew install jq shellcheck
+      - name: Check POSIX and Bash syntax
+        run: |
+          sh -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
+          bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
+      - name: Run ShellCheck
+        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
+      - name: Run POSIX integration tests
         run: tests/linux/run.sh
 
   powershell:

@@ -6,8 +6,11 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ### Added
 
+- macOS support through the shared POSIX installer, setup, sync, and uninstall
+  path, including automatic Bitwarden App Store/DMG agent socket selection and
+  a macOS CI lane.
 - Versioned, secret-free provider record schema and Bitwarden adapters for
-  Linux/WSL and Windows.
+  Linux/macOS/WSL and Windows.
 - Provider capability probing and conformance tests for schema enforcement,
   secret exclusion, CLI failure, alias collisions, metadata injection, and
   agent identity matching.
@@ -28,6 +31,8 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ### Fixed
 
+- POSIX scripts no longer depend on GNU-only `readlink -f`, `chmod --reference`,
+  `find -maxdepth`, or `sha256sum` behavior.
 - Windows publication no longer passes an empty backup path to
   `System.IO.File.Replace` when the main SSH config already exists.
 - Windows managed-file ACLs remain readable by OpenSSH and Git after SSH

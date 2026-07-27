@@ -39,7 +39,7 @@ new_home() {
     export GIT_CONFIG_GLOBAL="$TEST_HOME/gitconfig"
     export BW_SESSION="mock-session-token"
     unset MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
-    unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH
+    unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH MOCK_CURL_FAILURE MOCK_UNAME_S
 }
 
 write_preferences() {
@@ -64,6 +64,14 @@ run_sync() {
     # TEST_SHELL_FLAGS intentionally expands into shell options such as "-x".
     # shellcheck disable=SC2086
     PATH="$REPO_ROOT/tests/mocks:$PATH" sh ${TEST_SHELL_FLAGS:-} "$REPO_ROOT/linux/sync.sh" "$@"
+}
+
+file_checksum() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
 }
 
 pass() {
@@ -117,12 +125,43 @@ assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "identity_backend=disk"
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "private_key_policy=export"
 assert_contains "$HOME/.bashrc" '. "$HOME/.ssh/sshwitch-env.sh"'
 assert_file "$HOME/.ssh/sshwitch-env.sh"
-for test_shell in dash bash; do
+for test_shell in sh bash; do
     "$test_shell" -c '. "$1"; command -v sshwitch >/dev/null; alias sync-ssh >/dev/null' \
         sh "$HOME/.ssh/sshwitch-env.sh" ||
         fail "SSHwitch or legacy shell command was not defined for $test_shell"
 done
 pass "interactive setup writes version 2 preferences and one portable profile entry"
+
+new_home macos_installer
+export MOCK_UNAME_S=Darwin
+export MOCK_CURL_FAILURE=1
+if installer_output=$(sh "$REPO_ROOT/install.sh" 2>&1); then
+    fail "Installer unexpectedly succeeded with a failed download"
+fi
+printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch" ||
+    fail "Installer rejected macOS before attempting the release download"
+if printf '%s' "$installer_output" | grep -qF "supports Linux"; then
+    fail "Installer reported macOS as unsupported"
+fi
+assert_no_file "$HOME/.local/share/sshwitch"
+pass "release installer accepts macOS and fails safely on download errors"
+
+new_home macos_setup
+export SHELL=/bin/zsh
+export MOCK_UNAME_S=Darwin
+mkdir -p "$HOME/Library/Containers/com.bitwarden.desktop"
+setup_output=$(printf "s\ns\n1\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" 2>&1)
+printf '%s' "$setup_output" | grep -qF "Detected OS: macOS" ||
+    fail "Setup did not detect macOS"
+expected_store_socket="$HOME/Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock"
+sh -c '. "$1"; [ "$SSH_AUTH_SOCK" = "$2" ]' sh \
+    "$HOME/.ssh/sshwitch-env.sh" "$expected_store_socket" ||
+    fail "macOS App Store agent socket was not selected"
+rmdir "$HOME/Library/Containers/com.bitwarden.desktop"
+sh -c '. "$1"; [ "$SSH_AUTH_SOCK" = "$2" ]' sh \
+    "$HOME/.ssh/sshwitch-env.sh" "$HOME/.bitwarden-ssh-agent.sock" ||
+    fail "macOS DMG agent socket was not selected"
+pass "macOS setup selects the Bitwarden App Store or DMG agent socket"
 
 new_home successful_agent_sync
 write_preferences agent
@@ -160,12 +199,12 @@ printf "version=2\nprovider=bitwarden\nidentity_backend=agent\nprivate_key_polic
 chmod 600 "$XDG_CONFIG_HOME/sync-ssh/config"
 printf "legacy generation\n" >"$HOME/.ssh/sync-ssh/current/config"
 printf "# Added by Sync-SSH\nInclude ~/.ssh/sync-ssh/current/config\n" >"$HOME/.ssh/config"
-legacy_main_hash=$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')
+legacy_main_hash=$(file_checksum "$HOME/.ssh/config")
 export MOCK_FAIL_LIST=1
 if run_sync >/dev/null 2>&1; then
     fail "Failed provider unexpectedly migrated the legacy installation"
 fi
-[ "$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')" = "$legacy_main_hash" ] ||
+[ "$(file_checksum "$HOME/.ssh/config")" = "$legacy_main_hash" ] ||
     fail "Failed migration changed the active SSH config"
 assert_contains "$HOME/.ssh/sync-ssh/current/config" "legacy generation"
 assert_no_file "$HOME/.ssh/sshwitch/current/config"
@@ -178,10 +217,10 @@ assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
 assert_no_file "$HOME/.ssh/sshwitch/current/keys/production"
 pass "legacy agent_mode preferences map to the provider-neutral model"
 
-before_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
+before_hash=$(file_checksum "$HOME/.ssh/sshwitch/current/config")
 export MOCK_HOSTNAME="dry-run.example.com"
 run_sync --dry-run >/dev/null
-dry_run_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
+dry_run_hash=$(file_checksum "$HOME/.ssh/sshwitch/current/config")
 [ "$before_hash" = "$dry_run_hash" ] || fail "Dry run changed the active generation"
 pass "dry run validates without publishing"
 unset MOCK_HOSTNAME
@@ -190,7 +229,7 @@ export MOCK_FAIL_LIST=1
 if run_sync >/dev/null 2>&1; then
     fail "Bitwarden list failure unexpectedly succeeded"
 fi
-after_hash=$(sha256sum "$HOME/.ssh/sshwitch/current/config" | awk '{print $1}')
+after_hash=$(file_checksum "$HOME/.ssh/sshwitch/current/config")
 [ "$before_hash" = "$after_hash" ] || fail "List failure changed the active generation"
 pass "vault failure leaves active generation unchanged"
 
@@ -244,11 +283,11 @@ write_preferences agent
 mkdir -p "$HOME/.ssh"
 printf "Host manual\n  HostName manual.example\n%s\nmanual-tail\n" \
     "# --- START SYNC-SSH MANAGED SECTION ---" >"$HOME/.ssh/config"
-original_hash=$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')
+original_hash=$(file_checksum "$HOME/.ssh/config")
 if run_sync >/dev/null 2>&1; then
     fail "Malformed markers unexpectedly succeeded"
 fi
-new_hash=$(sha256sum "$HOME/.ssh/config" | awk '{print $1}')
+new_hash=$(file_checksum "$HOME/.ssh/config")
 [ "$original_hash" = "$new_hash" ] || fail "Malformed marker handling changed manual config"
 pass "malformed markers fail closed"
 
@@ -256,7 +295,7 @@ new_home symlinked_config
 write_preferences agent
 mkdir -p "$HOME/.ssh" "$HOME/dotfiles"
 printf "Host manual\n  HostName manual.example\n" >"$HOME/dotfiles/ssh-config"
-ln -s "$HOME/dotfiles/ssh-config" "$HOME/.ssh/config"
+ln -s "../dotfiles/ssh-config" "$HOME/.ssh/config"
 run_sync
 [ -L "$HOME/.ssh/config" ] || fail "Sync replaced the user's SSH config symlink"
 assert_contains "$HOME/dotfiles/ssh-config" "Include ~/.ssh/sshwitch/current/config"
@@ -288,4 +327,4 @@ if git config --global --get commit.gpgsign >/dev/null 2>&1; then
 fi
 pass "Git signing settings are restored"
 
-printf "\nAll %s Linux integration tests passed.\n" "$PASS_COUNT"
+printf "\nAll %s POSIX integration tests passed.\n" "$PASS_COUNT"

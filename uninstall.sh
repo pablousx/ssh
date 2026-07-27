@@ -19,8 +19,24 @@ LEGACY_INCLUDE_LINE="Include ~/.ssh/sync-ssh/current/config"
 START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
 END_MARKER="# --- END SYNC-SSH MANAGED SECTION ---"
 
+resolve_symlink_target() {
+    target_path=$1
+    link_count=0
+    while [ -L "$target_path" ]; do
+        link_count=$((link_count + 1))
+        [ "$link_count" -le 40 ] || return 1
+        link_target=$(readlink "$target_path") || return 1
+        case "$link_target" in
+            /*) target_path=$link_target ;;
+            *) target_path="$(dirname "$target_path")/$link_target" ;;
+        esac
+    done
+    target_dir=$(CDPATH= cd -- "$(dirname "$target_path")" && pwd -P) || return 1
+    printf '%s/%s\n' "$target_dir" "$(basename "$target_path")"
+}
+
 if [ -L "$MAIN_CONFIG" ]; then
-    resolved_main=$(readlink -f -- "$MAIN_CONFIG") || {
+    resolved_main=$(resolve_symlink_target "$MAIN_CONFIG") || {
         printf "Unable to resolve SSH config symlink: %s\n" "$MAIN_CONFIG" >&2
         exit 1
     }
@@ -37,8 +53,23 @@ confirm() {
 safe_replace() {
     source_file=$1
     generated_file=$2
-    chmod --reference="$source_file" "$generated_file" 2>/dev/null || chmod 600 "$generated_file"
+    if source_mode=$(stat -c '%a' "$source_file" 2>/dev/null); then
+        chmod "$source_mode" "$generated_file"
+    elif source_mode=$(stat -f '%Lp' "$source_file" 2>/dev/null); then
+        chmod "$source_mode" "$generated_file"
+    else
+        chmod 600 "$generated_file"
+    fi
     mv "$generated_file" "$source_file"
+}
+
+directory_is_empty() {
+    for directory_entry in "$1"/.[!.]* "$1"/..?* "$1"/*; do
+        if [ -e "$directory_entry" ] || [ -L "$directory_entry" ]; then
+            return 1
+        fi
+    done
+    return 0
 }
 
 restore_git_setting() {
@@ -169,11 +200,10 @@ fi
 
 [ ! -d "$APP_CONFIG_DIR" ] || rm -rf -- "$APP_CONFIG_DIR"
 [ ! -d "$LEGACY_APP_CONFIG_DIR" ] || rm -rf -- "$LEGACY_APP_CONFIG_DIR"
-if [ -d "$STATE_DIR" ] && [ -z "$(find "$STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+if [ -d "$STATE_DIR" ] && directory_is_empty "$STATE_DIR"; then
     rmdir "$STATE_DIR"
 fi
-if [ -d "$LEGACY_STATE_DIR" ] &&
-    [ -z "$(find "$LEGACY_STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+if [ -d "$LEGACY_STATE_DIR" ] && directory_is_empty "$LEGACY_STATE_DIR"; then
     rmdir "$LEGACY_STATE_DIR"
 fi
 

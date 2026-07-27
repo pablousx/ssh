@@ -37,8 +37,24 @@ LOCK_DIR="$STATE_DIR/sync.lock"
 STAGING_DIR=""
 LOCK_ACQUIRED=false
 
+resolve_symlink_target() {
+    target_path=$1
+    link_count=0
+    while [ -L "$target_path" ]; do
+        link_count=$((link_count + 1))
+        [ "$link_count" -le 40 ] || return 1
+        link_target=$(readlink "$target_path") || return 1
+        case "$link_target" in
+            /*) target_path=$link_target ;;
+            *) target_path="$(dirname "$target_path")/$link_target" ;;
+        esac
+    done
+    target_dir=$(CDPATH= cd -- "$(dirname "$target_path")" && pwd -P) || return 1
+    printf '%s/%s\n' "$target_dir" "$(basename "$target_path")"
+}
+
 if [ -L "$MAIN_CONFIG" ]; then
-    resolved_main=$(readlink -f -- "$MAIN_CONFIG") || {
+    resolved_main=$(resolve_symlink_target "$MAIN_CONFIG") || {
         printf "Unable to resolve SSH config symlink: %s\n" "$MAIN_CONFIG" >&2
         exit 1
     }

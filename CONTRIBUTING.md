@@ -2,17 +2,23 @@
 
 ## Local checks
 
-Linux and WSL changes should pass:
+Linux, macOS, and WSL changes should pass:
 
 ```sh
 dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh \
-  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/ssh-add
+  linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 tests/linux/run.sh
 ```
+
+On macOS, use `sh -n` in place of `dash -n` when `dash` is unavailable. The
+same integration suite runs in the macOS CI job.
 
 Windows changes should pass in both Windows PowerShell 5.1 and PowerShell 7:
 
@@ -34,7 +40,8 @@ and add a failure-path regression test instead.
 - Provider output must satisfy the canonical secret-free schema.
 - Agent identities must match provider public keys before publication.
 - Sync must reject duplicate normalized aliases.
-- Linux and Windows should produce equivalent SSH entries for the same fixture.
+- Linux, macOS, and Windows should produce equivalent SSH entries for the same
+  fixture.
 - Uninstall must remove only files and settings owned by SSHwitch.
 
 Update `CHANGELOG.md` for user-visible changes.

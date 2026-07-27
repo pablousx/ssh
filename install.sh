@@ -17,16 +17,25 @@ cleanup() {
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
-for command_name in curl tar sha256sum; do
+for command_name in curl tar; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf "Error: required command not found: %s\n" "$command_name" >&2
         exit 1
     }
 done
 
+if command -v sha256sum >/dev/null 2>&1; then
+    CHECKSUM_COMMAND="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    CHECKSUM_COMMAND="shasum"
+else
+    printf "Error: required command not found: sha256sum or shasum\n" >&2
+    exit 1
+fi
+
 case "$(uname -s)" in
-    Linux) ;;
-    *) printf "This installer supports Linux and WSL only.\n" >&2; exit 1 ;;
+    Linux|Darwin) ;;
+    *) printf "This installer supports Linux, WSL, and macOS only.\n" >&2; exit 1 ;;
 esac
 
 archive_name="sshwitch-$VERSION.tar.gz"
@@ -39,14 +48,18 @@ curl -fsSL "$release_url/$archive_name" -o "$STAGING_ROOT/$archive_name"
 curl -fsSL "$release_url/$archive_name.sha256" -o "$STAGING_ROOT/$archive_name.sha256"
 (
     cd "$STAGING_ROOT"
-    sha256sum -c "$archive_name.sha256"
+    if [ "$CHECKSUM_COMMAND" = "sha256sum" ]; then
+        sha256sum -c "$archive_name.sha256"
+    else
+        shasum -a 256 -c "$archive_name.sha256"
+    fi
 )
 
 tar -xzf "$STAGING_ROOT/$archive_name" -C "$STAGING_ROOT"
 [ -f "$STAGING_ROOT/sshwitch/linux/setup.sh" ] &&
     [ -f "$STAGING_ROOT/sshwitch/linux/sync.sh" ] &&
     [ -f "$STAGING_ROOT/sshwitch/linux/providers/bitwarden.sh" ] || {
-        printf "Release archive is missing Linux scripts.\n" >&2
+        printf "Release archive is missing POSIX scripts.\n" >&2
         exit 1
     }
 

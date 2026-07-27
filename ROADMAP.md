@@ -5,8 +5,8 @@
 The first three foundation steps are implemented in the current working tree:
 
 1. Define a versioned, secret-free provider record schema.
-2. Separate provider behavior from the validation and publication core on Linux,
-   WSL, and Windows.
+2. Separate provider behavior from the validation and publication core on
+   Linux, macOS, WSL, and Windows.
 3. Move Bitwarden behind the provider contract and separate provider choice,
    identity backend, and private-key policy.
 
@@ -45,7 +45,8 @@ consent, staging, permissions, and cleanup guarantees as Bitwarden disk mode.
 
 Decision gate:
 
-- Confirm stable CLI fields and machine-readable output on Linux and Windows.
+- Confirm stable CLI fields and machine-readable output on Linux, macOS, and
+  Windows.
 - Confirm reliable mapping between listed public keys and agent identities.
 - Confirm authentication can fail closed without exposing session material.
 - Require parity tests on POSIX shell, Windows PowerShell 5.1, and PowerShell 7.

@@ -3,7 +3,8 @@
 ## Project purpose
 
 SSHwitch generates validated OpenSSH configuration from provider-managed SSH
-records on Linux, WSL, and Windows. Bitwarden is the first built-in provider.
+records on Linux, macOS, WSL, and Windows. Bitwarden is the first built-in
+provider.
 The repository intentionally maintains two platform implementations:
 
 - POSIX shell: `install.sh`, `uninstall.sh`, and `linux/`
@@ -27,9 +28,9 @@ Use the smallest relevant set:
   release credentials.
 
 The PowerShell skill contains generic Windows editor-path advice. This checkout
-is normally operated from WSL, so repository tool paths remain POSIX paths such
-as `/home/...`; use Windows paths only inside PowerShell code or when invoking a
-native Windows process.
+is normally operated from a POSIX host, so repository tool paths remain POSIX
+paths such as `/home/...` or `/Users/...`; use Windows paths only inside
+PowerShell code or when invoking a native Windows process.
 
 ## Non-negotiable safety contract
 
@@ -84,7 +85,7 @@ Preferences are application state, not Git configuration:
 
 | Platform | Preferences | State |
 |---|---|---|
-| Linux/WSL | `${XDG_CONFIG_HOME:-~/.config}/sshwitch/config` | `${XDG_STATE_HOME:-~/.local/state}/sshwitch/` |
+| Linux/macOS/WSL | `${XDG_CONFIG_HOME:-~/.config}/sshwitch/config` | `${XDG_STATE_HOME:-~/.local/state}/sshwitch/` |
 | Windows | `%APPDATA%\sshwitch\config.json` | `%LOCALAPPDATA%\sshwitch-state\` |
 
 Legacy `sync-ssh.*` Git keys are migration inputs only. Do not reintroduce them
@@ -98,7 +99,7 @@ valid. Legacy `agent_mode` is a migration input only.
 
 Keep these behaviors aligned:
 
-| Behavior | Linux | Windows |
+| Behavior | POSIX (Linux/macOS/WSL) | Windows |
 |---|---|---|
 | Alias normalization | lowercase and replace outside `[a-z0-9._-]` | same |
 | Metadata fields | case-insensitive `HostName`, `User`, `Email`/`GitEmail` | same |
@@ -163,20 +164,23 @@ implementation has the same bug. Add a parity regression test when practical.
 
 Run the relevant subset during iteration and the full set before handoff.
 
-### Linux and WSL
+### Linux, macOS, and WSL
 
 ```sh
 dash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
   linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
-  tests/mocks/ssh-add
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh \
   linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
-  tests/mocks/ssh-add
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh \
   linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw \
-  tests/mocks/ssh-add
+  tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
 tests/linux/run.sh
 ```
+
+On macOS, use `sh -n` when `dash` is unavailable. The integration suite must
+also pass in the macOS CI job.
 
 The integration suite must use `tests/mocks/bw`; never point tests at a real
 vault or the user's real home directory.
@@ -243,7 +247,7 @@ paths, flags, preference values, and release artifact names.
 A change is complete only when:
 
 1. the safety contract still holds;
-2. Linux and Windows behavior is intentionally aligned;
+2. Linux, macOS, and Windows behavior is intentionally aligned;
 3. relevant regression tests exist;
 4. local syntax/tests pass, with unavailable checks called out;
 5. documentation matches the implementation;

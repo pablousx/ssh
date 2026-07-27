@@ -1,7 +1,8 @@
 # SSHwitch
 
 SSHwitch builds a validated OpenSSH configuration from provider-managed SSH
-records on Linux, WSL, and Windows. Bitwarden is the first built-in provider.
+records on Linux, macOS, WSL, and Windows. Bitwarden is the first built-in
+provider.
 
 It uses the provider's SSH agent by default. An explicitly confirmed disk
 identity backend is available for environments that require exported private
@@ -112,11 +113,12 @@ All platforms require:
   `bw login`;
 - OpenSSH client tools (`ssh`, `ssh-add`, and `ssh-keygen`).
 
-Linux and WSL additionally require:
+Linux, macOS, and WSL additionally require:
 
 - POSIX `sh`;
 - `jq`;
-- `curl`, `tar`, and `sha256sum` for the release installer.
+- `curl` and `tar` for the release installer;
+- `sha256sum` on Linux/WSL or the macOS-provided `shasum`.
 
 WSL agent mode additionally requires:
 
@@ -130,7 +132,7 @@ Git is required only when Git commit signing is enabled.
 Installers download the tagged release archive, verify its SHA-256 checksum,
 stage it, and restore the previous installation if setup fails.
 
-### Linux and WSL
+### Linux, macOS, and WSL
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/install.sh | sh
@@ -160,7 +162,7 @@ appropriate CurrentUser policy before installation.
 
 ### Manual development installation
 
-Linux or WSL:
+Linux, macOS, or WSL:
 
 ```sh
 git clone https://github.com/pablousx/sshwitch "$HOME/ssh"
@@ -181,7 +183,7 @@ typing an explicit confirmation phrase.
 
 ## Usage
 
-Linux and WSL:
+Linux, macOS, and WSL:
 
 ```sh
 sshwitch
@@ -241,9 +243,23 @@ reset-ssh-agent
 The reset helper terminates only the recorded bridge PID; it does not broadly
 kill other `npiperelay.exe` processes.
 
+## macOS agent socket
+
+[Bitwarden uses different sockets for its two macOS
+distributions](https://bitwarden.com/help/ssh-agent/). SSHwitch prefers an
+active socket; when neither socket exists yet, the App Store application
+container selects the App Store path and the `.dmg` path is the fallback:
+
+```text
+App Store: ~/Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock
+.dmg:      ~/.bitwarden-ssh-agent.sock
+```
+
+Keep Bitwarden Desktop open with SSH Agent enabled before running `sshwitch`.
+
 ## Files and state
 
-Linux and WSL:
+Linux, macOS, and WSL:
 
 | Path | Purpose |
 |---|---|
@@ -275,7 +291,7 @@ editing the file.
 
 ## Uninstallation
 
-Linux and WSL:
+Linux, macOS, and WSL:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pablousx/sshwitch/v1.0.0/uninstall.sh | sh
@@ -329,8 +345,9 @@ which manual lines belong to a malformed block.
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and behavioral requirements.
-CI covers `dash`, Bash, Linux integration cases, Windows PowerShell 5.1,
-PowerShell 7, PSScriptAnalyzer, and Pester.
+CI covers the shared POSIX implementation on Linux and macOS, including `dash`
+and Bash syntax checks on Linux, plus Windows PowerShell 5.1, PowerShell 7,
+PSScriptAnalyzer, and Pester.
 
 Releases are created from `v*` tags. The tag must match `VERSION`; the workflow
 publishes `.tar.gz` and `.zip` packages plus SHA-256 files consumed by the
