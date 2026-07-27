@@ -198,6 +198,43 @@ Describe "SSHwitch source safety" {
         }
     }
 
+    It "keeps managed files readable after applying restricted ACLs" {
+        $temporaryRoot = [System.IO.Path]::GetTempPath()
+        if ($temporaryRoot.StartsWith("\\") -and $env:LOCALAPPDATA) {
+            $temporaryRoot = Join-Path $env:LOCALAPPDATA "Temp"
+        }
+        $temporary = Join-Path $temporaryRoot (
+            "sshwitch-acl-test-" + [Guid]::NewGuid().ToString("N")
+        )
+        try {
+            $managedRoot = Join-Path $temporary "managed-permissions"
+            $currentDir = Join-Path $managedRoot "current"
+            $configPath = Join-Path $currentDir "config"
+            [System.IO.Directory]::CreateDirectory($currentDir) | Out-Null
+            Write-Utf8NoBom -Path $configPath -Content "Host test`n"
+
+            Set-ManagedPermissions -Paths @{ ManagedRoot = $managedRoot }
+
+            $content = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+            if ($content -ne "Host test`n") {
+                throw "Managed SSH config was not readable after applying ACLs."
+            }
+            $acl = Get-Acl -LiteralPath $configPath
+            $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $userAccess = @($acl.Access | Where-Object {
+                $_.IdentityReference.Translate(
+                    [System.Security.Principal.SecurityIdentifier]
+                ).Value -eq $currentUserSid -and
+                $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow
+            })
+            if ($userAccess.Count -eq 0) {
+                throw "Managed SSH config did not inherit an allow rule for the current user."
+            }
+        } finally {
+            Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It "generates an agent-mode config without a private key" {
         $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("sshwitch-test-" + [Guid]::NewGuid().ToString("N"))
         try {

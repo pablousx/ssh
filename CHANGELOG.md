@@ -30,6 +30,8 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 - Windows publication no longer passes an empty backup path to
   `System.IO.File.Replace` when the main SSH config already exists.
+- Windows managed-file ACLs remain readable by OpenSSH and Git after SSH
+  signing is enabled.
 
 ### Security
 

@@ -602,9 +602,30 @@ function Publish-GeneratedFiles {
 
 function Set-ManagedPermissions {
     param([hashtable]$Paths)
-    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    & icacls $Paths.ManagedRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "${currentUser}:(OI)(CI)F" /t | Out-Null
+    $icacls = Join-Path $env:WINDIR "System32\icacls.exe"
+    if (-not (Test-Path -LiteralPath $icacls)) {
+        throw "Required Windows ACL tool was not found: $icacls"
+    }
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $managedGrants = @(
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-5-32-544:(OI)(CI)F",
+        "*${currentUserSid}:(OI)(CI)F"
+    )
+
+    # Protect the owned root, then let every descendant inherit its narrow ACL.
+    # Applying (OI)(CI) grants recursively can leave regular files without an
+    # effective access rule because those flags describe child inheritance.
+    $aclOutput = & $icacls $Paths.ManagedRoot /inheritance:r /grant:r $managedGrants
     Assert-LastExitCode "Securing the SSHwitch managed directory"
+    $aclOutput = $null
+
+    if (Get-ChildItem -LiteralPath $Paths.ManagedRoot -Force -ErrorAction Stop |
+        Select-Object -First 1) {
+        $aclOutput = & $icacls (Join-Path $Paths.ManagedRoot "*") /reset /t /c
+        Assert-LastExitCode "Securing the SSHwitch managed files"
+        $aclOutput = $null
+    }
 }
 
 function SSHwitch {
@@ -698,11 +719,11 @@ function SSHwitch {
             return
         }
 
+        Set-ManagedPermissions -Paths $paths
         Publish-GeneratedFiles -Paths $paths -StagingDir $stagingDir -StagedMain $stagedMain
         $stagingDir = $null
         $stagedMain = $null
 
-        Set-ManagedPermissions -Paths $paths
         Update-GitSigning -Paths $paths -Preferences $preferences
         Write-Host (
             "[OK] Synced $($result.Processed) SSH hosts from $($preferences.provider) " +
