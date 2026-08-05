@@ -220,6 +220,8 @@ When enabled, SSHwitch owns these global Git settings:
 The previous value and whether it existed are recorded before modification.
 Disabling the feature or uninstalling restores a setting only if it still
 contains the value written by SSHwitch. User-modified values are preserved.
+If signing is enabled but no `git-sign` public key is available, SSHwitch warns
+and still syncs the SSH host configuration without changing Git settings.
 
 ## WSL agent bridge
 

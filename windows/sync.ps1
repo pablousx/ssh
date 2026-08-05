@@ -518,13 +518,17 @@ function Restore-OwnedGitValue {
 function Update-GitSigning {
     param([hashtable]$Paths, $Preferences)
     if ($Preferences.commit_signing -eq "skip") { return }
-    Ensure-Command git
 
     if ($Preferences.commit_signing -eq "yes") {
         $signingKey = Join-Path $Paths.CurrentDir "keys\git-sign.pub"
         if (-not (Test-Path -LiteralPath $signingKey)) {
-            throw "Git signing is enabled, but no 'git-sign' public key was found."
+            Write-Warning (
+                "Git signing is enabled, but no 'git-sign' public key was found; " +
+                "SSH configuration was synced without updating Git signing settings."
+            )
+            return
         }
+        Ensure-Command git
         Set-OwnedGitValue $Paths "gpg.format" "gpg-format" "ssh"
         Set-OwnedGitValue $Paths "user.signingkey" "user-signingkey" $signingKey
         Set-OwnedGitValue $Paths "commit.gpgsign" "commit-gpgsign" "true"
@@ -533,6 +537,7 @@ function Update-GitSigning {
             Set-OwnedGitValue $Paths "gpg.ssh.allowedSignersFile" "allowed-signers-file" $allowed
         }
     } else {
+        Ensure-Command git
         Restore-OwnedGitValue $Paths "allowed-signers-file"
         Restore-OwnedGitValue $Paths "commit-gpgsign"
         Restore-OwnedGitValue $Paths "user-signingkey"
@@ -709,9 +714,13 @@ function SSHwitch {
         $stagedMain = Join-Path (Split-Path $paths.MainConfig -Parent) (".sshwitch-config." + [Guid]::NewGuid().ToString("N"))
         New-StagedMainConfig -Paths $paths -Destination $stagedMain
         if ($preferences.commit_signing -eq "yes") {
-            Ensure-Command git
-            if (-not (Test-Path -LiteralPath (Join-Path $stagingDir "keys\git-sign.pub"))) {
-                throw "Git signing is enabled, but no 'git-sign' public key was found."
+            if (Test-Path -LiteralPath (Join-Path $stagingDir "keys\git-sign.pub")) {
+                Ensure-Command git
+            } elseif ($DryRun) {
+                Write-Warning (
+                    "Git signing is enabled, but no 'git-sign' public key was found; " +
+                    "SSH configuration would be synced without updating Git signing settings."
+                )
             }
         }
         if ($DryRun) {

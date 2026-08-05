@@ -4,6 +4,11 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- A missing `git-sign` public key now warns without preventing SSH host
+  configuration from being synchronized.
+
 ## [1.1.0] - 2026-07-27
 
 ### Added

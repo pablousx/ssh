@@ -279,10 +279,13 @@ apply_git_signing() {
     allowed_signers_path=$3
 
     [ "$signing_pref" = "skip" ] && return 0
-    require_command git
 
     if [ "$signing_pref" = "yes" ]; then
-        [ -f "$sign_key_path" ] || die "Git signing is enabled, but no 'git-sign' public key was found."
+        if [ ! -f "$sign_key_path" ]; then
+            log_warn "Git signing is enabled, but no 'git-sign' public key was found; SSH configuration was synced without updating Git signing settings."
+            return 0
+        fi
+        require_command git
         set_owned_git_value gpg.format gpg-format ssh
         set_owned_git_value user.signingkey user-signingkey "$sign_key_path"
         set_owned_git_value commit.gpgsign commit-gpgsign true
@@ -290,6 +293,7 @@ apply_git_signing() {
             set_owned_git_value gpg.ssh.allowedSignersFile allowed-signers-file "$allowed_signers_path"
         fi
     elif [ "$signing_pref" = "no" ]; then
+        require_command git
         restore_owned_git_value gpg.ssh.allowedSignersFile allowed-signers-file
         restore_owned_git_value commit.gpgsign commit-gpgsign
         restore_owned_git_value user.signingkey user-signingkey
@@ -571,9 +575,11 @@ sshwitch_sync() {
     prepare_main_config "$staged_main"
 
     if [ "$commit_signing" = "yes" ]; then
-        require_command git
-        [ -f "$STAGING_DIR/keys/git-sign.pub" ] ||
-            die "Git signing is enabled, but no 'git-sign' public key was found."
+        if [ -f "$STAGING_DIR/keys/git-sign.pub" ]; then
+            require_command git
+        elif [ "$DRY_RUN" = true ]; then
+            log_warn "Git signing is enabled, but no 'git-sign' public key was found; SSH configuration would be synced without updating Git signing settings."
+        fi
     fi
     if [ "$DRY_RUN" = true ]; then
         log_info "Dry run successful: generated configuration passed validation; no live files were changed."

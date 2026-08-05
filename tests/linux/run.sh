@@ -327,4 +327,17 @@ if git config --global --get commit.gpgsign >/dev/null 2>&1; then
 fi
 pass "Git signing settings are restored"
 
+new_home git_signing_key_missing
+write_preferences agent yes
+missing_signing_output=$(run_sync 2>&1) ||
+    fail "A missing git-sign key unexpectedly prevented SSH synchronization"
+printf '%s' "$missing_signing_output" |
+    grep -qF "SSH configuration was synced without updating Git signing settings" ||
+    fail "A missing git-sign key did not emit the expected warning"
+assert_file "$HOME/.ssh/sshwitch/current/config"
+if git config --global --get commit.gpgsign >/dev/null 2>&1; then
+    fail "Git signing was changed without a git-sign key"
+fi
+pass "missing Git signing key warns without preventing SSH synchronization"
+
 printf "\nAll %s POSIX integration tests passed.\n" "$PASS_COUNT"

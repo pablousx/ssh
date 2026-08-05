@@ -139,6 +139,18 @@ Describe "SSHwitch source safety" {
         }
     }
 
+    It "warns instead of failing when the Git signing key is missing" {
+        $currentDir = Join-Path $TestDrive "missing-signing-key"
+        [System.IO.Directory]::CreateDirectory($currentDir) | Out-Null
+        $warnings = @(Update-GitSigning `
+            -Paths @{ CurrentDir = $currentDir } `
+            -Preferences ([pscustomobject]@{ commit_signing = "yes" }) 3>&1)
+        if (($warnings | Out-String) -notmatch
+            "SSH configuration was synced without updating Git signing settings") {
+            throw "A missing git-sign key did not emit the expected warning."
+        }
+    }
+
     It "migrates the former Sync-SSH Include without changing manual entries" {
         $mainConfig = Join-Path $TestDrive "ssh-config"
         $stagedMain = Join-Path $TestDrive "ssh-config.staged"
