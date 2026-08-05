@@ -1,15 +1,8 @@
 # Changelog
 
-All notable changes are documented here. Versions follow Semantic Versioning.
-
-## [Unreleased]
-
-### Fixed
-
-- A missing `git-sign` public key now warns without preventing SSH host
-  configuration from being synchronized.
-- Bitwarden master-password failures now suppress low-level cryptography
-  diagnostics and display a concise unlock error.
+All notable changes are documented here. Versions follow Semantic Versioning,
+and release entries are generated from Conventional Commits by the reviewed
+release pull request.
 
 ## [1.1.0] - 2026-07-27
 

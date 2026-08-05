@@ -352,12 +352,22 @@ CI covers the shared POSIX implementation on Linux and macOS, including `dash`
 and Bash syntax checks on Linux, plus Windows PowerShell 5.1, PowerShell 7,
 PSScriptAnalyzer, and Pester.
 
-When a new `VERSION` reaches `main`, the release workflow creates the matching
-`vX.Y.Z` tag and publishes `.tar.gz` and `.zip` packages plus SHA-256 files
-consumed by the installers. Installer and uninstaller scripts are attached as
-release assets, and the release notes include version-pinned POSIX and Windows
-installation commands. Pushes keep succeeding without republishing when that
-version already has a release.
+Every push to `main` evaluates Conventional Commit messages since the latest
+release and opens or updates a SemVer release pull request. The proposed version
+uses these rules:
+
+| Commit | Version change |
+|---|---|
+| `fix: ...` | Patch, for example `1.1.0` to `1.1.1` |
+| `feat: ...` | Minor, for example `1.1.0` to `1.2.0` |
+| `feat!: ...`, `fix!: ...`, or a `BREAKING CHANGE:` footer | Major, for example `1.1.0` to `2.0.0` |
+
+The release pull request updates `VERSION` and `CHANGELOG.md`. Merging it into
+`main` runs the publishing workflow, which creates the matching `vX.Y.Z` tag
+and publishes `.tar.gz` and `.zip` packages plus SHA-256 files consumed by the
+installers. Installer and uninstaller scripts are attached as release assets,
+and the release notes include version-pinned POSIX and Windows installation
+commands. Publishing is idempotent and never moves an existing tag.
 
 ## License
 
