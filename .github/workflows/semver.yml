@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - .release-please-manifest.json
+      - CHANGELOG.md
+      - VERSION
 
 permissions:
   contents: write

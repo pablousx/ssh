@@ -352,9 +352,10 @@ CI covers the shared POSIX implementation on Linux and macOS, including `dash`
 and Bash syntax checks on Linux, plus Windows PowerShell 5.1, PowerShell 7,
 PSScriptAnalyzer, and Pester.
 
-Every push to `main` evaluates Conventional Commit messages since the latest
-release and opens or updates a SemVer release pull request. The proposed version
-uses these rules:
+Every non-release push to `main` evaluates Conventional Commit messages since
+the latest release and opens or updates a SemVer release pull request. Merging
+that release pull request does not start another proposal run. The proposed
+version uses these rules:
 
 | Commit | Version change |
 |---|---|
