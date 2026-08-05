@@ -90,6 +90,35 @@ Describe "SSHwitch source safety" {
         }
     }
 
+    It "reports a concise error when Bitwarden unlock fails" {
+        function global:Read-Host {
+            param([string]$Prompt, [switch]$AsSecureString)
+            return ConvertTo-SecureString "wrong-password" -AsPlainText -Force
+        }
+        function global:bw {
+            if ($args[0] -eq "status") {
+                $global:LASTEXITCODE = 0
+                return '{"status":"locked"}'
+            }
+            if ($args[0] -eq "unlock") {
+                $global:LASTEXITCODE = 25
+                Write-Error "Cryptography error, The decryption operation failed" -ErrorAction Continue
+                return
+            }
+            throw "Unexpected mock bw arguments: $args"
+        }
+        $message = ""
+        try {
+            Connect-Provider
+        } catch {
+            $message = $_.Exception.Message
+        }
+        if ($message -ne
+            "Unable to unlock Bitwarden vault. Check your master password and try again.") {
+            throw "Unexpected Bitwarden unlock error: $message"
+        }
+    }
+
     It "normalizes Bitwarden items without exposing private keys" {
         function global:bw {
             $global:LASTEXITCODE = 0

@@ -38,7 +38,8 @@ new_home() {
     export XDG_STATE_HOME="$TEST_HOME/.local/state"
     export GIT_CONFIG_GLOBAL="$TEST_HOME/gitconfig"
     export BW_SESSION="mock-session-token"
-    unset MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
+    unset MOCK_FAIL_UNLOCK MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
+    unset MOCK_BW_STATUS MOCK_BW_SESSION
     unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH MOCK_CURL_FAILURE MOCK_UNAME_S
 }
 
@@ -116,6 +117,35 @@ provider_export_private_key production "$provider_private"
 [ "$(cat "$provider_private")" = "$MOCK_PRIVATE_KEY" ] ||
     fail "Provider private-key export returned unexpected content"
 pass "Bitwarden adapter conforms to provider protocol version 1"
+
+new_home bitwarden_bad_password
+write_preferences agent
+export MOCK_BW_STATUS=locked
+export MOCK_FAIL_UNLOCK=1
+if bad_password_output=$(printf 'wrong-password\n' | run_sync 2>&1); then
+    fail "Bitwarden unlock unexpectedly succeeded with a bad password"
+fi
+printf '%s' "$bad_password_output" |
+    grep -qF "Unable to unlock Bitwarden vault. Check your master password and try again." ||
+    fail "Bitwarden unlock failure did not report a concise password error"
+if printf '%s' "$bad_password_output" | grep -qF "Cryptography error"; then
+    fail "Bitwarden cryptography diagnostics leaked into the user-facing error"
+fi
+assert_no_file "$HOME/.ssh/sshwitch/current/config"
+pass "bad Bitwarden password reports a concise error"
+
+new_home bitwarden_unlock_trace
+write_preferences agent
+export MOCK_BW_STATUS=locked
+export MOCK_BW_SESSION=trace-session-secret
+export TEST_SHELL_FLAGS=-x
+trace_output=$(printf 'trace-password-secret\n' | run_sync 2>&1) ||
+    fail "Bitwarden unlock failed while checking debug trace safety"
+unset TEST_SHELL_FLAGS
+if printf '%s' "$trace_output" | grep -qE 'trace-password-secret|trace-session-secret'; then
+    fail "Bitwarden password or session token appeared in debug output"
+fi
+pass "Bitwarden unlock secrets stay out of debug traces"
 
 new_home setup_smoke
 export SHELL=/bin/bash

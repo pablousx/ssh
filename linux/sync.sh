@@ -36,6 +36,7 @@ GIT_STATE_DIR="$STATE_DIR/git"
 LOCK_DIR="$STATE_DIR/sync.lock"
 STAGING_DIR=""
 LOCK_ACQUIRED=false
+SSHWITCH_TTY_STATE=""
 
 resolve_symlink_target() {
     target_path=$1
@@ -71,6 +72,10 @@ log_warn() { printf "\033[33m%s\033[0m\n" "$1" >&2; }
 log_error() { printf "\033[31m%s\033[0m\n" "$1" >&2; }
 
 cleanup() {
+    if [ -n "$SSHWITCH_TTY_STATE" ]; then
+        stty "$SSHWITCH_TTY_STATE" 2>/dev/null || true
+        SSHWITCH_TTY_STATE=""
+    fi
     if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
         rm -rf -- "$STAGING_DIR"
     fi

@@ -8,6 +8,8 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 - A missing `git-sign` public key now warns without preventing SSH host
   configuration from being synchronized.
+- Bitwarden master-password failures now suppress low-level cryptography
+  diagnostics and display a concise unlock error.
 
 ## [1.1.0] - 2026-07-27
 

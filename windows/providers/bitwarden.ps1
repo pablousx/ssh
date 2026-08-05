@@ -27,8 +27,23 @@ function Connect-Provider {
     }
     if ($status -eq "locked" -or [string]::IsNullOrWhiteSpace($env:BW_SESSION)) {
         Write-Host "Unlocking Bitwarden vault..." -ForegroundColor Cyan
-        $session = (& bw unlock --raw | Out-String).Trim()
-        Assert-LastExitCode "Bitwarden unlock"
+        $securePassword = Read-Host "Master password" -AsSecureString
+        $credential = New-Object System.Management.Automation.PSCredential(
+            "sshwitch",
+            $securePassword
+        )
+        $env:SSHWITCH_BW_PASSWORD = $credential.GetNetworkCredential().Password
+        try {
+            $session = (& bw unlock --raw --passwordenv SSHWITCH_BW_PASSWORD 2>$null |
+                Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to unlock Bitwarden vault. Check your master password and try again."
+            }
+        } finally {
+            Remove-Item Env:SSHWITCH_BW_PASSWORD -ErrorAction SilentlyContinue
+            $credential = $null
+            $securePassword = $null
+        }
         if ([string]::IsNullOrWhiteSpace($session)) {
             throw "Bitwarden returned an empty session token."
         }

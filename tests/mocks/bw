@@ -6,6 +6,10 @@ case "${1:-}" in
         printf '{"status":"%s"}\n' "${MOCK_BW_STATUS:-unlocked}"
         ;;
     unlock)
+        if [ "${MOCK_FAIL_UNLOCK:-0}" != "0" ]; then
+            printf 'Cryptography error, The decryption operation failed\n' >&2
+            exit 25
+        fi
         printf '%s\n' "${MOCK_BW_SESSION:-mock-session-token}"
         ;;
     sync)

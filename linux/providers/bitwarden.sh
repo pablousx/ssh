@@ -10,6 +10,55 @@ provider_requirements() {
     require_command jq
 }
 
+provider_unlock() {
+    trace_was_enabled=false
+    case $- in
+        *x*) trace_was_enabled=true; set +x ;;
+    esac
+
+    printf "? Master password: " >&2
+    if [ -t 0 ]; then
+        SSHWITCH_TTY_STATE=$(stty -g) || {
+            [ "$trace_was_enabled" = false ] || set -x
+            return 1
+        }
+        stty -echo || {
+            SSHWITCH_TTY_STATE=""
+            [ "$trace_was_enabled" = false ] || set -x
+            return 1
+        }
+    fi
+    password_read=true
+    IFS= read -r SSHWITCH_BW_PASSWORD || password_read=false
+    if [ -n "${SSHWITCH_TTY_STATE:-}" ]; then
+        stty "$SSHWITCH_TTY_STATE" 2>/dev/null || true
+        SSHWITCH_TTY_STATE=""
+    fi
+    printf "\n" >&2
+    if [ "$password_read" = false ]; then
+        unset SSHWITCH_BW_PASSWORD
+        [ "$trace_was_enabled" = false ] || set -x
+        return 1
+    fi
+
+    export SSHWITCH_BW_PASSWORD
+    unlock_succeeded=true
+    BW_SESSION=$(bw unlock --raw --passwordenv SSHWITCH_BW_PASSWORD 2>/dev/null) ||
+        unlock_succeeded=false
+    unset SSHWITCH_BW_PASSWORD
+    BW_SESSION=$(printf '%s' "$BW_SESSION" | tr -d '\r\n')
+    export BW_SESSION
+    unlock_status=0
+    if [ "$unlock_succeeded" = false ]; then
+        unlock_status=1
+    elif [ -z "$BW_SESSION" ]; then
+        unlock_status=2
+    fi
+    [ "$trace_was_enabled" = false ] || set -x
+
+    return "$unlock_status"
+}
+
 provider_authenticate() {
     status_json=$(bw status) || die "Unable to query Bitwarden status."
     status=$(printf '%s' "$status_json" | jq -er '.status') ||
@@ -21,20 +70,14 @@ provider_authenticate() {
             ;;
         locked)
             log_info "Unlocking Bitwarden vault..."
-            session=$(bw unlock --raw) || die "Failed to unlock Bitwarden vault."
-            session=$(printf '%s' "$session" | tr -d '\r\n')
-            [ -n "$session" ] || die "Bitwarden returned an empty session token."
-            BW_SESSION=$session
-            export BW_SESSION
+            provider_unlock ||
+                die "Unable to unlock Bitwarden vault. Check your master password and try again."
             ;;
         unlocked)
             if [ -z "${BW_SESSION:-}" ]; then
                 log_info "Requesting a Bitwarden session token..."
-                session=$(bw unlock --raw) || die "Failed to obtain a Bitwarden session token."
-                session=$(printf '%s' "$session" | tr -d '\r\n')
-                [ -n "$session" ] || die "Bitwarden returned an empty session token."
-                BW_SESSION=$session
-                export BW_SESSION
+                provider_unlock ||
+                    die "Unable to unlock Bitwarden vault. Check your master password and try again."
             fi
             ;;
         *)
