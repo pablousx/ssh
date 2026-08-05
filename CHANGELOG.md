@@ -4,6 +4,13 @@ All notable changes are documented here. Versions follow Semantic Versioning,
 and release entries are generated from Conventional Commits by the reviewed
 release pull request.
 
+## [1.2.1](https://github.com/pablousx/sshwitch/compare/v1.2.0...v1.2.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* update paths-ignore in SemVer workflow to prevent unnecessary triggers ([76280fb](https://github.com/pablousx/sshwitch/commit/76280fba70b51661beb8026e0fc2a1263ba9a9a7))
+
 ## [1.2.0](https://github.com/pablousx/sshwitch/compare/v1.1.0...v1.2.0) (2026-08-05)
 
 
