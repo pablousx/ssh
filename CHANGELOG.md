@@ -4,6 +4,19 @@ All notable changes are documented here. Versions follow Semantic Versioning,
 and release entries are generated from Conventional Commits by the reviewed
 release pull request.
 
+## [1.3.0](https://github.com/pablousx/sshwitch/compare/v1.2.0...v1.3.0) (2026-08-05)
+
+
+### Features
+
+* enhance Bitwarden unlock process to suppress cryptography errors and provide concise feedback ([c6b4879](https://github.com/pablousx/sshwitch/commit/c6b4879f59b5e4b00b6893f2fc39bbb798e2d17c))
+* implement SemVer release proposal workflow and update changelog for automated versioning ([9150499](https://github.com/pablousx/sshwitch/commit/9150499f8fbb748978a1175d26934b09c3f76b74))
+
+
+### Bug Fixes
+
+* warn when Git signing key is missing without preventing SSH synchronization ([14d9218](https://github.com/pablousx/sshwitch/commit/14d92182a66050c7877c8e697d2d47cfe401c9c7))
+
 ## [1.2.0](https://github.com/pablousx/sshwitch/compare/v1.1.0...v1.2.0) (2026-08-05)
 
 
