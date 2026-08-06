@@ -31,6 +31,16 @@ publication. The disk identity backend invokes a separate provider export
 capability, intentionally writes private keys into the tool-owned generation,
 and requires an explicit setup confirmation. Switching back to agent mode
 replaces the complete generation and removes those managed private-key files.
+The Bitwarden adapter may retain one provider response in process memory during
+an explicit disk-mode generation so it can export multiple keys without
+re-querying the CLI. That response is cleared after generation and is never
+written to canonical-record files, timing output, logs, or application state.
+
+Daily automatic sync never stores provider credentials. It starts a child only
+when the current shell already has `BW_SESSION`, and the child inherits that
+environment for its lifetime. If the session is absent, locked, or invalid,
+automatic sync fails without prompting and without changing the active
+generation. The last-success state contains only an epoch timestamp.
 
 The project owns only:
 

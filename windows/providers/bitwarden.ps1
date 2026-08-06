@@ -14,6 +14,7 @@ function Assert-ProviderRequirements {
 }
 
 function Connect-Provider {
+    param([switch]$NonInteractive)
     $statusRaw = (& bw status | Out-String)
     Assert-LastExitCode "Bitwarden status"
     try {
@@ -26,7 +27,12 @@ function Connect-Provider {
         throw "Bitwarden is not logged in. Run 'bw login' first."
     }
     if ($status -eq "locked" -or [string]::IsNullOrWhiteSpace($env:BW_SESSION)) {
-        Write-Host "Unlocking Bitwarden vault..." -ForegroundColor Cyan
+        if ($NonInteractive) {
+            throw "Bitwarden requires an interactive unlock; run 'SSHwitch' to refresh credentials."
+        }
+        if (-not $script:SSHwitchQuiet) {
+            Write-Host "Unlocking Bitwarden vault..." -ForegroundColor Cyan
+        }
         $securePassword = Read-Host "Master password" -AsSecureString
         $credential = New-Object System.Management.Automation.PSCredential(
             "sshwitch",
@@ -51,6 +57,14 @@ function Connect-Provider {
     }
 }
 
+function Sync-Provider {
+    if (-not $script:SSHwitchQuiet) {
+        Write-Host "Syncing Bitwarden vault..." -ForegroundColor Cyan
+    }
+    & bw sync 2>$null | Out-Null
+    Assert-LastExitCode "Bitwarden sync"
+}
+
 function Get-BitwardenField {
     param(
         [Parameter(Mandatory = $true)]$Item,
@@ -65,17 +79,21 @@ function Get-BitwardenField {
 }
 
 function Get-ProviderRecords {
-    Write-Host "Syncing Bitwarden vault..." -ForegroundColor Cyan
-    & bw sync 2>$null | Out-Null
-    Assert-LastExitCode "Bitwarden sync"
-
-    Write-Host "Fetching SSH key items..." -ForegroundColor Cyan
+    if (-not $script:SSHwitchQuiet) {
+        Write-Host "Fetching SSH key items..." -ForegroundColor Cyan
+    }
     $itemsRaw = (& bw list items | Out-String)
     Assert-LastExitCode "Listing Bitwarden items"
     try {
         $allItems = @($itemsRaw | ConvertFrom-Json -ErrorAction Stop)
     } catch {
         throw "Bitwarden returned invalid item JSON."
+    }
+    $script:BitwardenItemsById = @{}
+    foreach ($item in $allItems) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$item.id)) {
+            $script:BitwardenItemsById[[string]$item.id] = $item
+        }
     }
 
     $records = New-Object System.Collections.Generic.List[object]
@@ -120,13 +138,7 @@ function Export-ProviderPrivateKey {
         [Parameter(Mandatory = $true)][string]$Destination
     )
 
-    $itemRaw = (& bw get item $SourceId | Out-String)
-    Assert-LastExitCode "Retrieving Bitwarden SSH item for private-key export"
-    try {
-        $item = $itemRaw | ConvertFrom-Json -ErrorAction Stop
-    } catch {
-        throw "Bitwarden returned invalid item JSON during private-key export."
-    }
+    $item = if ($script:BitwardenItemsById) { $script:BitwardenItemsById[$SourceId] } else { $null }
     $privateKey = if ($item.type -eq 5 -and $item.sshKey) {
         [string]$item.sshKey.privateKey
     } else {
@@ -137,4 +149,8 @@ function Export-ProviderPrivateKey {
     }
     Write-Utf8NoBom -Path $Destination -Content ($privateKey.Trim() + "`n")
     return $true
+}
+
+function Clear-ProviderSensitiveState {
+    $script:BitwardenItemsById = $null
 }

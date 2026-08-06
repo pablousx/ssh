@@ -1,13 +1,17 @@
 [CmdletBinding()]
 param(
     [Alias("DryRun")][switch]$SSHwitchDryRun,
-    [Alias("Version")][switch]$SSHwitchVersion
+    [Alias("Version")][switch]$SSHwitchVersion,
+    [Alias("Timings")][switch]$SSHwitchTimings,
+    [Alias("NonInteractive")][switch]$SSHwitchNonInteractive,
+    [switch]$SSHwitchQuiet
 )
 
 $script:LegacyStartMarker = "# --- START SYNC-SSH MANAGED SECTION ---"
 $script:LegacyEndMarker = "# --- END SYNC-SSH MANAGED SECTION ---"
 $script:IncludeLine = "Include ~/.ssh/sshwitch/current/config"
 $script:LegacyIncludeLine = "Include ~/.ssh/sync-ssh/current/config"
+$script:SSHwitchScriptPath = $PSCommandPath
 
 function Write-Utf8NoBom {
     param(
@@ -41,6 +45,7 @@ function Get-SSHwitchPaths {
         LegacyStateDir = Join-Path $env:LOCALAPPDATA "sync-ssh-state"
         GitStateDir    = Join-Path $stateDir "git"
         LockFile       = Join-Path $stateDir "sync.lock"
+        LastSuccess    = Join-Path $stateDir "last-success"
     }
 }
 
@@ -70,6 +75,7 @@ function Get-Preferences {
         provider       = "bitwarden"
         identity_backend = ""
         private_key_policy = ""
+        auto_sync     = "off"
     }
     $legacyAgentMode = ""
 
@@ -87,7 +93,8 @@ function Get-Preferences {
                 "keep_alive",
                 "provider",
                 "identity_backend",
-                "private_key_policy"
+                "private_key_policy",
+                "auto_sync"
             )) {
                 $property = $saved.PSObject.Properties[$name]
                 if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
@@ -128,6 +135,9 @@ function Get-Preferences {
     }
     if ($preferences.keep_alive -notin @("yes", "no", "skip")) {
         throw "Invalid keep_alive preference: $($preferences.keep_alive)"
+    }
+    if ($preferences.auto_sync -notin @("off", "daily")) {
+        throw "Invalid auto_sync preference: $($preferences.auto_sync)"
     }
     if ($preferences.provider -notmatch "^[a-z0-9][a-z0-9-]*$") {
         throw "Invalid provider preference: $($preferences.provider)"
@@ -265,18 +275,25 @@ function Write-ValidatedPublicKey {
     Assert-LastExitCode "Validating public key $(Split-Path -Leaf $Path)"
 }
 
+function Get-AgentIdentities {
+    $agentRaw = (& ssh-add -L 2>$null | Out-String)
+    Assert-LastExitCode "Listing identities from the selected SSH agent"
+    return @($agentRaw -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Assert-AgentIdentityAvailable {
-    param([Parameter(Mandatory = $true)][string]$PublicKeyPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$PublicKeyPath,
+        [Parameter(Mandatory = $true)][string[]]$AgentIdentities
+    )
 
     $publicParts = ((Get-Content -LiteralPath $PublicKeyPath -Raw).Trim() -split "\s+")
     if ($publicParts.Count -lt 2) {
         throw "Unable to identify a provider public key."
     }
     $expected = "$($publicParts[0]) $($publicParts[1])"
-    $agentRaw = (& ssh-add -L 2>$null | Out-String)
-    Assert-LastExitCode "Listing identities from the selected SSH agent"
     $matched = $false
-    foreach ($line in @($agentRaw -split "\r?\n")) {
+    foreach ($line in $AgentIdentities) {
         $parts = @($line.Trim() -split "\s+")
         if ($parts.Count -ge 2 -and "$($parts[0]) $($parts[1])" -eq $expected) {
             $matched = $true
@@ -293,7 +310,8 @@ function New-GeneratedFiles {
         [Parameter(Mandatory = $true)][object[]]$Records,
         [Parameter(Mandatory = $true)][hashtable]$Paths,
         [Parameter(Mandatory = $true)]$Preferences,
-        [Parameter(Mandatory = $true)][string]$StagingDir
+        [Parameter(Mandatory = $true)][string]$StagingDir,
+        [string[]]$AgentIdentities
     )
 
     $keysDir = Join-Path $StagingDir "keys"
@@ -304,6 +322,10 @@ function New-GeneratedFiles {
     $manifest.Add("config")
     $processed = 0
     $signEmail = ""
+
+    if ($Preferences.identity_backend -eq "agent" -and $null -eq $AgentIdentities) {
+        $AgentIdentities = Get-AgentIdentities
+    }
 
     foreach ($record in @($Records | Sort-Object { ([string]$_.name).ToLowerInvariant() })) {
         $name = [string]$record.name
@@ -324,7 +346,7 @@ function New-GeneratedFiles {
         $publicPath = Join-Path $keysDir "$alias.pub"
         Write-ValidatedPublicKey -PublicKey $publicKey -Path $publicPath
         if ($Preferences.identity_backend -eq "agent") {
-            Assert-AgentIdentityAvailable -PublicKeyPath $publicPath
+            Assert-AgentIdentityAvailable -PublicKeyPath $publicPath -AgentIdentities $AgentIdentities
         }
         $manifest.Add("keys/$alias.pub")
 
@@ -343,7 +365,9 @@ function New-GeneratedFiles {
             throw "Provider SSH item '$name' has no HostName field."
         }
         if ($record.shared) {
-            Write-Host "Using shared provider SSH item: $name" -ForegroundColor Yellow
+            if (-not $script:SSHwitchQuiet) {
+                Write-Host "Using shared provider SSH item: $name" -ForegroundColor Yellow
+            }
         }
 
         $identitySuffix = ".pub"
@@ -510,7 +534,9 @@ function Restore-OwnedGitValue {
             & git config --global --unset-all $state.key 2>$null
         }
     } else {
-        Write-Host "Preserving user-modified Git setting: $($state.key)" -ForegroundColor Yellow
+        if (-not $script:SSHwitchQuiet) {
+            Write-Host "Preserving user-modified Git setting: $($state.key)" -ForegroundColor Yellow
+        }
     }
     Remove-Item -LiteralPath $statePath -Force
 }
@@ -542,10 +568,12 @@ function Update-GitSigning {
         $signingKey = Join-Path $Paths.CurrentDir "keys\git-sign.pub"
         if (-not (Test-Path -LiteralPath $signingKey)) {
             Restore-OwnedGitSigning -Paths $Paths
-            Write-Warning (
-                "Git signing is enabled, but no 'git-sign' public key was found; " +
-                "SSH configuration was synced and SSHwitch-owned Git signing settings were restored."
-            )
+            if (-not $script:SSHwitchQuiet) {
+                Write-Warning (
+                    "Git signing is enabled, but no 'git-sign' public key was found; " +
+                    "SSH configuration was synced and SSHwitch-owned Git signing settings were restored."
+                )
+            }
             return
         }
         Ensure-Command git
@@ -654,10 +682,14 @@ function SSHwitch {
     param(
         [string]$OutputDir = "$HOME\.ssh",
         [switch]$DryRun,
-        [switch]$Version
+        [switch]$Version,
+        [switch]$Timings,
+        [switch]$NonInteractive,
+        [switch]$Quiet
     )
 
     $ErrorActionPreference = "Stop"
+    $script:SSHwitchQuiet = [bool]$Quiet
     if ($Version) {
         $versionFile = Join-Path $PSScriptRoot "VERSION"
         if (-not (Test-Path -LiteralPath $versionFile)) {
@@ -675,6 +707,14 @@ function SSHwitch {
     $lock = $null
     $stagingDir = $null
     $stagedMain = $null
+    $totalWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $timing = [ordered]@{
+        authentication = 0
+        vault_sync      = 0
+        vault_list      = 0
+        generation      = 0
+        publication     = 0
+    }
 
     try {
         Ensure-Command ssh
@@ -713,10 +753,23 @@ function SSHwitch {
         }
         $lock = Enter-SyncLock -Paths $paths
         Import-LegacyState -Paths $paths
-        Connect-Provider
+        $stageWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Connect-Provider -NonInteractive:$NonInteractive
+        $timing.authentication = $stageWatch.Elapsed.TotalSeconds
+        $stageWatch.Restart()
+        Sync-Provider
+        $timing.vault_sync = $stageWatch.Elapsed.TotalSeconds
+        $stageWatch.Restart()
         $providerEnvelope = Get-ProviderRecords
+        $timing.vault_list = $stageWatch.Elapsed.TotalSeconds
         Assert-ProviderEnvelope -Envelope $providerEnvelope -Provider $preferences.provider
 
+        $stageWatch.Restart()
+        $agentIdentities = if ($preferences.identity_backend -eq "agent") {
+            Get-AgentIdentities
+        } else {
+            $null
+        }
         [System.IO.Directory]::CreateDirectory($paths.OutputDir) | Out-Null
         [System.IO.Directory]::CreateDirectory($paths.ManagedRoot) | Out-Null
         $stagingDir = Join-Path $paths.ManagedRoot (".staging." + [Guid]::NewGuid().ToString("N"))
@@ -725,14 +778,20 @@ function SSHwitch {
             -Records @($providerEnvelope.records) `
             -Paths $paths `
             -Preferences $preferences `
-            -StagingDir $stagingDir
+            -StagingDir $stagingDir `
+            -AgentIdentities $agentIdentities
+        if (Get-Command Clear-ProviderSensitiveState -ErrorAction SilentlyContinue) {
+            Clear-ProviderSensitiveState
+        }
+        $timing.generation = $stageWatch.Elapsed.TotalSeconds
 
+        $stageWatch.Restart()
         $stagedMain = Join-Path (Split-Path $paths.MainConfig -Parent) (".sshwitch-config." + [Guid]::NewGuid().ToString("N"))
         New-StagedMainConfig -Paths $paths -Destination $stagedMain
         if ($preferences.commit_signing -eq "yes") {
             if (Test-Path -LiteralPath (Join-Path $stagingDir "keys\git-sign.pub")) {
                 Ensure-Command git
-            } elseif ($DryRun) {
+            } elseif ($DryRun -and -not $Quiet) {
                 Write-Warning (
                     "Git signing is enabled, but no 'git-sign' public key was found; " +
                     "SSH configuration would be synced without updating Git signing settings."
@@ -740,7 +799,11 @@ function SSHwitch {
             }
         }
         if ($DryRun) {
-            Write-Host "Dry run successful: generated configuration passed validation; active files were not changed." -ForegroundColor Cyan
+            if (-not $Quiet) {
+                Write-Host "Dry run successful: generated configuration passed validation; active files were not changed." -ForegroundColor Cyan
+            }
+            $timing.publication = $stageWatch.Elapsed.TotalSeconds
+            if ($Timings) { Write-SSHwitchTimings -Timing $timing -Total $totalWatch.Elapsed.TotalSeconds }
             return
         }
 
@@ -750,11 +813,23 @@ function SSHwitch {
         $stagedMain = $null
 
         Update-GitSigning -Paths $paths -Preferences $preferences
-        Write-Host (
-            "[OK] Synced $($result.Processed) SSH hosts from $($preferences.provider) " +
-            "using the $($preferences.identity_backend) identity backend."
-        ) -ForegroundColor Green
+        $lastSuccessTemporary = Join-Path $paths.StateDir (".last-success." + [Guid]::NewGuid().ToString("N"))
+        Write-Utf8NoBom -Path $lastSuccessTemporary -Content (
+            [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString() + "`n"
+        )
+        Move-Item -LiteralPath $lastSuccessTemporary -Destination $paths.LastSuccess -Force
+        $timing.publication = $stageWatch.Elapsed.TotalSeconds
+        if (-not $Quiet) {
+            Write-Host (
+                "[OK] Synced $($result.Processed) SSH hosts from $($preferences.provider) " +
+                "using the $($preferences.identity_backend) identity backend."
+            ) -ForegroundColor Green
+        }
+        if ($Timings) { Write-SSHwitchTimings -Timing $timing -Total $totalWatch.Elapsed.TotalSeconds }
     } finally {
+        if (Get-Command Clear-ProviderSensitiveState -ErrorAction SilentlyContinue) {
+            Clear-ProviderSensitiveState
+        }
         if ($stagingDir -and (Test-Path -LiteralPath $stagingDir)) {
             Remove-Item -LiteralPath $stagingDir -Recurse -Force
         }
@@ -773,17 +848,72 @@ function Sync-SSH {
     param(
         [string]$OutputDir = "$HOME\.ssh",
         [switch]$DryRun,
-        [switch]$Version
+        [switch]$Version,
+        [switch]$Timings,
+        [switch]$NonInteractive
     )
     Write-Warning "Sync-SSH is deprecated; use SSHwitch."
-    SSHwitch -OutputDir $OutputDir -DryRun:$DryRun -Version:$Version
+    SSHwitch -OutputDir $OutputDir -DryRun:$DryRun -Version:$Version `
+        -Timings:$Timings -NonInteractive:$NonInteractive
+}
+
+function Write-SSHwitchTimings {
+    param([System.Collections.IDictionary]$Timing, [double]$Total)
+    Write-Host "`nSSHwitch timings (seconds):"
+    foreach ($entry in $Timing.GetEnumerator()) {
+        Write-Host ("  {0,-15} {1:N2}" -f ($entry.Key -replace "_", "-"), $entry.Value)
+    }
+    Write-Host ("  {0,-15} {1:N2}" -f "total", $Total)
+}
+
+function Invoke-SSHwitchAutoSync {
+    try {
+        $paths = Get-SSHwitchPaths
+        if (-not (Test-Path -LiteralPath $paths.Preferences)) { return }
+        $saved = Get-Content -LiteralPath $paths.Preferences -Raw -ErrorAction Stop |
+            ConvertFrom-Json -ErrorAction Stop
+        $autoProperty = $saved.PSObject.Properties["auto_sync"]
+        if (-not $autoProperty -or [string]$autoProperty.Value -ne "daily") { return }
+
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        [long]$lastSuccess = 0
+        if (Test-Path -LiteralPath $paths.LastSuccess) {
+            $lastText = (Get-Content -LiteralPath $paths.LastSuccess -Raw -ErrorAction SilentlyContinue).Trim()
+            [long]::TryParse($lastText, [ref]$lastSuccess) | Out-Null
+        }
+        if (($now - $lastSuccess) -lt 86400) { return }
+
+        if ([string]::IsNullOrWhiteSpace($env:BW_SESSION)) {
+            Write-Host (
+                "SSHwitch automatic sync is due; run SSHwitch to unlock Bitwarden and sync."
+            ) -ForegroundColor Yellow
+            return
+        }
+
+        $powerShellExecutable = (Get-Process -Id $PID).Path
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $powerShellExecutable
+        $startInfo.Arguments = (
+            '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
+            $script:SSHwitchScriptPath + '" -SSHwitchNonInteractive -SSHwitchQuiet'
+        )
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        [System.Diagnostics.Process]::Start($startInfo).Dispose()
+    } catch {
+        Write-Host "SSHwitch could not evaluate automatic sync status." -ForegroundColor Yellow
+    }
 }
 
 if ($MyInvocation.InvocationName -ne ".") {
     try {
-        SSHwitch -DryRun:$SSHwitchDryRun -Version:$SSHwitchVersion
+        SSHwitch -DryRun:$SSHwitchDryRun -Version:$SSHwitchVersion `
+            -Timings:$SSHwitchTimings -NonInteractive:$SSHwitchNonInteractive `
+            -Quiet:$SSHwitchQuiet
     } catch {
-        Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
+        if (-not $SSHwitchQuiet) {
+            Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
+        }
         exit 1
     }
 }

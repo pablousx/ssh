@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+if [ -n "${MOCK_BW_CALL_LOG:-}" ]; then
+    printf '%s\n' "$*" >>"$MOCK_BW_CALL_LOG"
+fi
+
 case "${1:-}" in
     status)
         printf '{"status":"%s"}\n' "${MOCK_BW_STATUS:-unlocked}"

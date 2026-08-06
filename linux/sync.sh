@@ -3,8 +3,12 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd -P)
 DRY_RUN=false
-case "${1:-}" in
-    --version)
+TIMINGS=false
+NON_INTERACTIVE=false
+QUIET=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version)
         if [ -f "$SCRIPT_DIR/VERSION" ]; then
             cat "$SCRIPT_DIR/VERSION"
         elif [ -f "$SCRIPT_DIR/../VERSION" ]; then
@@ -13,11 +17,15 @@ case "${1:-}" in
             printf "development\n"
         fi
         exit 0
-        ;;
-    --dry-run) DRY_RUN=true ;;
-    "") ;;
-    *) printf "Usage: %s [--dry-run|--version]\n" "$0" >&2; exit 2 ;;
-esac
+            ;;
+        --dry-run) DRY_RUN=true ;;
+        --timings) TIMINGS=true ;;
+        --non-interactive) NON_INTERACTIVE=true ;;
+        --auto) NON_INTERACTIVE=true; QUIET=true ;;
+        *) printf "Usage: %s [--dry-run] [--timings] [--non-interactive] [--version]\n" "$0" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 LEGACY_START_MARKER="# --- START SYNC-SSH MANAGED SECTION ---"
 LEGACY_END_MARKER="# --- END SYNC-SSH MANAGED SECTION ---"
@@ -34,9 +42,17 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sshwitch"
 LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/sync-ssh"
 GIT_STATE_DIR="$STATE_DIR/git"
 LOCK_DIR="$STATE_DIR/sync.lock"
+LAST_SUCCESS_FILE="$STATE_DIR/last-success"
 STAGING_DIR=""
 LOCK_ACQUIRED=false
 SSHWITCH_TTY_STATE=""
+AGENT_IDENTITIES=""
+TIMING_AUTH=0
+TIMING_PROVIDER_SYNC=0
+TIMING_PROVIDER_LIST=0
+TIMING_GENERATION=0
+TIMING_PUBLICATION=0
+TIMING_TOTAL_START=$(date +%s)
 
 resolve_symlink_target() {
     target_path=$1
@@ -66,12 +82,33 @@ if [ -L "$MAIN_CONFIG" ]; then
     MAIN_CONFIG=$resolved_main
 fi
 
-log_info() { printf "\033[36m%s\033[0m\n" "$1" >&2; }
-log_success() { printf "\033[32m%s\033[0m\n" "$1" >&2; }
-log_warn() { printf "\033[33m%s\033[0m\n" "$1" >&2; }
-log_error() { printf "\033[31m%s\033[0m\n" "$1" >&2; }
+log_info() { [ "$QUIET" = true ] || printf "\033[36m%s\033[0m\n" "$1" >&2; }
+log_success() { [ "$QUIET" = true ] || printf "\033[32m%s\033[0m\n" "$1" >&2; }
+log_warn() { [ "$QUIET" = true ] || printf "\033[33m%s\033[0m\n" "$1" >&2; }
+log_error() { [ "$QUIET" = true ] || printf "\033[31m%s\033[0m\n" "$1" >&2; }
+
+elapsed_seconds() {
+    started_at=$1
+    finished_at=$(date +%s)
+    printf '%s\n' "$((finished_at - started_at))"
+}
+
+report_timings() {
+    [ "$TIMINGS" = true ] || return 0
+    timing_total=$(elapsed_seconds "$TIMING_TOTAL_START")
+    printf "\nSSHwitch timings (seconds):\n" >&2
+    printf "  authentication  %s\n" "$TIMING_AUTH" >&2
+    printf "  vault-sync      %s\n" "$TIMING_PROVIDER_SYNC" >&2
+    printf "  vault-list      %s\n" "$TIMING_PROVIDER_LIST" >&2
+    printf "  generation      %s\n" "$TIMING_GENERATION" >&2
+    printf "  publication     %s\n" "$TIMING_PUBLICATION" >&2
+    printf "  total           %s\n" "$timing_total" >&2
+}
 
 cleanup() {
+    if command -v provider_clear_sensitive_state >/dev/null 2>&1; then
+        provider_clear_sensitive_state || true
+    fi
     if [ -n "$SSHWITCH_TTY_STATE" ]; then
         stty "$SSHWITCH_TTY_STATE" 2>/dev/null || true
         SSHWITCH_TTY_STATE=""
@@ -216,9 +253,7 @@ verify_agent_identity() {
     public_key_path=$1
     expected_identity=$(awk 'NF >= 2 { print $1 " " $2; exit }' "$public_key_path")
     [ -n "$expected_identity" ] || die "Unable to identify a provider public key."
-    agent_identities=$(ssh-add -L 2>/dev/null) ||
-        die "Unable to list identities from the selected SSH agent."
-    printf '%s\n' "$agent_identities" |
+    printf '%s\n' "$AGENT_IDENTITIES" |
         awk -v expected="$expected_identity" '
           NF >= 2 && ($1 " " $2) == expected { found=1 }
           END { exit(found ? 0 : 1) }
@@ -481,29 +516,49 @@ sshwitch_sync() {
     aliases_file="$STAGING_DIR/.aliases"
     items_file="$STAGING_DIR/.items"
     provider_records="$STAGING_DIR/.provider-records"
+    record_fields="$STAGING_DIR/.record-fields"
     : >"$generated_config"
     : >"$aliases_file"
     chmod 600 "$generated_config" "$aliases_file"
 
+    timing_start=$(date +%s)
     provider_authenticate
+    TIMING_AUTH=$(elapsed_seconds "$timing_start")
+    timing_start=$(date +%s)
+    provider_sync
+    TIMING_PROVIDER_SYNC=$(elapsed_seconds "$timing_start")
+    timing_start=$(date +%s)
     provider_list_records "$provider_records"
+    TIMING_PROVIDER_LIST=$(elapsed_seconds "$timing_start")
     validate_provider_records "$provider_records" "$provider"
     jq -c '.records | sort_by(.name | ascii_downcase) | .[]' \
         "$provider_records" >"$items_file"
     chmod 600 "$items_file"
 
+    if [ "$identity_backend" = "agent" ]; then
+        AGENT_IDENTITIES=$(ssh-add -L 2>/dev/null) ||
+            die "Unable to list identities from the selected SSH agent."
+    fi
+
+    timing_start=$(date +%s)
     processed_count=0
     sign_email=""
     while IFS= read -r item; do
         [ -n "$item" ] || continue
-        name=$(printf '%s' "$item" | jq -er '.name')
-        source_id=$(printf '%s' "$item" | jq -er '.source_id')
-        role=$(printf '%s' "$item" | jq -er '.role')
-        hostname=$(printf '%s' "$item" | jq -r '.destination.hostname')
-        user=$(printf '%s' "$item" | jq -r '.destination.user')
-        email=$(printf '%s' "$item" | jq -r '.git_principal')
-        pubkey=$(printf '%s' "$item" | jq -r '.identity.public_key')
-        shared=$(printf '%s' "$item" | jq -r '.shared')
+        printf '%s' "$item" | jq -er '
+          .name, .source_id, .role, .destination.hostname, .destination.user,
+          .git_principal, .identity.public_key, (.shared | tostring)
+        ' >"$record_fields" || die "Unable to read a validated provider record."
+        {
+            IFS= read -r name
+            IFS= read -r source_id
+            IFS= read -r role
+            IFS= read -r hostname
+            IFS= read -r user
+            IFS= read -r email
+            IFS= read -r pubkey
+            IFS= read -r shared
+        } <"$record_fields"
         alias=$(sanitize_alias "$name")
         [ "$role" = "git-sign" ] && alias="git-sign"
 
@@ -555,6 +610,9 @@ sshwitch_sync() {
             "$alias" "$identity_suffix" >>"$generated_config"
         processed_count=$((processed_count + 1))
     done <"$items_file"
+    if command -v provider_clear_sensitive_state >/dev/null 2>&1; then
+        provider_clear_sensitive_state
+    fi
 
     case "$keep_alive" in
         yes) printf "\nHost *\n  ServerAliveInterval 60\n  ServerAliveCountMax 3\n" >>"$generated_config" ;;
@@ -582,13 +640,16 @@ sshwitch_sync() {
     } >"$STAGING_DIR/manifest"
     chmod 600 "$STAGING_DIR/manifest"
     rm -f "$provider_records" "$items_file" "$aliases_file"
+    rm -f "$record_fields"
 
     # OpenSSH must accept the complete generated file before anything is published.
     validation_alias=$(awk '/^Host / && $2 != "*" { print $2; exit }' "$generated_config")
     [ -n "$validation_alias" ] || validation_alias="sshwitch-validation"
     ssh -F "$generated_config" -G "$validation_alias" >/dev/null 2>&1 ||
         die "OpenSSH rejected the generated configuration."
+    TIMING_GENERATION=$(elapsed_seconds "$timing_start")
 
+    timing_start=$(date +%s)
     staged_main="$STATE_DIR/main-config.new"
     prepare_main_config "$staged_main"
 
@@ -604,6 +665,8 @@ sshwitch_sync() {
         if command -v diff >/dev/null 2>&1 && [ -f "$MAIN_CONFIG" ]; then
             diff -u "$MAIN_CONFIG" "$staged_main" || true
         fi
+        TIMING_PUBLICATION=$(elapsed_seconds "$timing_start")
+        report_timings
         return 0
     fi
 
@@ -619,7 +682,14 @@ sshwitch_sync() {
         "$CURRENT_DIR/keys/git-sign.pub" \
         "$CURRENT_DIR/allowed_signers"
 
+    last_success_temp="$STATE_DIR/.last-success.$$"
+    date +%s >"$last_success_temp"
+    chmod 600 "$last_success_temp"
+    mv "$last_success_temp" "$LAST_SUCCESS_FILE"
+    TIMING_PUBLICATION=$(elapsed_seconds "$timing_start")
+
     log_success "Synced $processed_count SSH hosts from $provider using the $identity_backend identity backend."
+    report_timings
 }
 
 sshwitch_sync

@@ -39,7 +39,8 @@ new_home() {
     export GIT_CONFIG_GLOBAL="$TEST_HOME/gitconfig"
     export BW_SESSION="mock-session-token"
     unset MOCK_FAIL_UNLOCK MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
-    unset MOCK_BW_STATUS MOCK_BW_SESSION MOCK_LATEST_TAG
+    unset MOCK_BW_STATUS MOCK_BW_SESSION MOCK_LATEST_TAG MOCK_BW_CALL_LOG
+    unset MOCK_SSH_ADD_CALL_LOG
     unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH MOCK_CURL_FAILURE MOCK_UNAME_S
     unset SSHWITCH_VERSION SYNC_SSH_VERSION
 }
@@ -49,7 +50,7 @@ write_preferences() {
     signing=${2:-skip}
     private_policy="never"
     [ "$backend" = "disk" ] && private_policy="export"
-    printf "version=2\nprovider=bitwarden\nidentity_backend=%s\nprivate_key_policy=%s\ncommit_signing=%s\nkeep_alive=skip\n" \
+    printf "version=2\nprovider=bitwarden\nidentity_backend=%s\nprivate_key_policy=%s\ncommit_signing=%s\nkeep_alive=skip\nauto_sync=off\n" \
         "$backend" "$private_policy" "$signing" \
         >"$XDG_CONFIG_HOME/sshwitch/config"
     chmod 600 "$XDG_CONFIG_HOME/sshwitch/config"
@@ -103,6 +104,7 @@ printf '%s' "$probe" | jq -e '
 ' >/dev/null || fail "Provider probe violates protocol version 1"
 provider_requirements
 provider_authenticate
+provider_sync
 provider_records="$TEST_HOME/provider-records.json"
 provider_list_records "$provider_records"
 jq -e '
@@ -144,14 +146,15 @@ export TEST_SHELL_FLAGS=-x
 trace_output=$(printf 'trace-password-secret\n' | run_sync 2>&1) ||
     fail "Bitwarden unlock failed while checking debug trace safety"
 unset TEST_SHELL_FLAGS
-if printf '%s' "$trace_output" | grep -qE 'trace-password-secret|trace-session-secret'; then
-    fail "Bitwarden password or session token appeared in debug output"
+if printf '%s' "$trace_output" |
+    grep -qE 'trace-password-secret|trace-session-secret|BEGIN OPENSSH PRIVATE KEY'; then
+    fail "Bitwarden password, session token, or private key appeared in debug output"
 fi
-pass "Bitwarden unlock secrets stay out of debug traces"
+pass "Bitwarden secrets stay out of debug traces"
 
 new_home setup_smoke
 export SHELL=/bin/bash
-printf "s\ns\n2\nexport private keys\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" >/dev/null
+printf "s\ns\ns\n2\nexport private keys\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" >/dev/null
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "provider=bitwarden"
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "identity_backend=disk"
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "private_key_policy=export"
@@ -167,6 +170,29 @@ for test_shell in sh bash; do
         fail "SSHwitch or legacy shell command was not defined for $test_shell"
 done
 pass "interactive setup writes version 2 preferences and one portable profile entry"
+
+new_home daily_auto_sync_notice
+export SHELL=/bin/bash
+printf "s\ns\ny\n1\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" >/dev/null
+assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "auto_sync=daily"
+unset BW_SESSION
+auto_notice=$(sh -c '. "$1"' sh "$HOME/.ssh/sshwitch-env.sh" 2>&1)
+printf '%s' "$auto_notice" | grep -qF "SSHwitch automatic sync is due" ||
+    fail "A due automatic sync without a session did not report the interactive action"
+printf '%s\n' "$(date +%s)" >"$XDG_STATE_HOME/sshwitch/last-success"
+auto_notice=$(sh -c '. "$1"' sh "$HOME/.ssh/sshwitch-env.sh" 2>&1)
+[ -z "$auto_notice" ] || fail "A recent automatic sync produced shell-startup output"
+printf '0\n' >"$XDG_STATE_HOME/sshwitch/last-success"
+export BW_SESSION=mock-session-token
+sh -c '. "$1"' sh "$HOME/.ssh/sshwitch-env.sh"
+wait_count=0
+while [ "$(cat "$XDG_STATE_HOME/sshwitch/last-success")" = 0 ] && [ "$wait_count" -lt 5 ]; do
+    sleep 1
+    wait_count=$((wait_count + 1))
+done
+[ "$(cat "$XDG_STATE_HOME/sshwitch/last-success")" != 0 ] ||
+    fail "A due automatic sync with a session did not complete in the background"
+pass "daily auto-sync due checks do not block shell startup"
 
 new_home stamped_installer
 export MOCK_UNAME_S=Darwin
@@ -199,7 +225,7 @@ new_home macos_setup
 export SHELL=/bin/zsh
 export MOCK_UNAME_S=Darwin
 mkdir -p "$HOME/Library/Containers/com.bitwarden.desktop"
-setup_output=$(printf "s\ns\n1\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" 2>&1)
+setup_output=$(printf "s\ns\ns\n1\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" 2>&1)
 printf '%s' "$setup_output" | grep -qF "Detected OS: macOS" ||
     fail "Setup did not detect macOS"
 expected_store_socket="$HOME/Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock"
@@ -218,13 +244,37 @@ pass "macOS setup selects the Bitwarden App Store or DMG agent socket"
 
 new_home successful_agent_sync
 write_preferences agent
-run_sync
+timing_output=$(run_sync --timings 2>&1)
+printf '%s' "$timing_output" | grep -qF "SSHwitch timings (seconds):" ||
+    fail "Timing output was not reported"
 assert_contains "$HOME/.ssh/config" "Include ~/.ssh/sshwitch/current/config"
 assert_contains "$HOME/.ssh/sshwitch/current/config" "Host production"
 assert_file "$HOME/.ssh/sshwitch/current/keys/production.pub"
 assert_no_file "$HOME/.ssh/sshwitch/current/keys/production"
 ssh -F "$HOME/.ssh/config" -G production >/dev/null
+assert_file "$XDG_STATE_HOME/sshwitch/last-success"
 pass "successful agent sync"
+
+new_home single_agent_snapshot
+write_preferences agent
+export MOCK_ITEMS_MODE=git-sign
+export MOCK_SSH_ADD_CALL_LOG="$TEST_HOME/ssh-add.calls"
+run_sync >/dev/null
+[ "$(wc -l <"$MOCK_SSH_ADD_CALL_LOG" | tr -d ' ')" = 1 ] ||
+    fail "Agent identities were queried more than once per generation"
+pass "agent identities are listed once per generation"
+
+new_home cached_disk_exports
+write_preferences disk
+export MOCK_ITEMS_MODE=git-sign
+export MOCK_BW_CALL_LOG="$TEST_HOME/bw.calls"
+run_sync >/dev/null
+if grep -q '^get item ' "$MOCK_BW_CALL_LOG"; then
+    fail "Disk mode fetched individual Bitwarden items after listing the vault"
+fi
+assert_file "$HOME/.ssh/sshwitch/current/keys/production"
+assert_file "$HOME/.ssh/sshwitch/current/keys/git-sign"
+pass "disk exports reuse the provider response held in adapter memory"
 
 new_home sync_ssh_brand_migration
 mkdir -p "$XDG_CONFIG_HOME/sync-ssh" "$HOME/.ssh/sync-ssh/current"

@@ -84,6 +84,7 @@ if (Test-Path -LiteralPath $PROFILE) {
             continue
         }
         if ($lines[$index] -eq ". `"$syncScript`"") { continue }
+        if ($lines[$index] -eq "Invoke-SSHwitchAutoSync") { continue }
         $filteredList.Add($lines[$index])
     }
     $filtered = @($filteredList)
@@ -163,6 +164,14 @@ if (Test-Path -LiteralPath $preferencesDir) {
 }
 if (Test-Path -LiteralPath $legacyPreferencesDir) {
     Remove-Item -LiteralPath $legacyPreferencesDir -Recurse -Force
+}
+$lastSuccess = Join-Path $stateDir "last-success"
+if (Test-Path -LiteralPath $lastSuccess) {
+    Remove-Item -LiteralPath $lastSuccess -Force
+}
+$legacyLastSuccess = Join-Path $legacyStateDir "last-success"
+if (Test-Path -LiteralPath $legacyLastSuccess) {
+    Remove-Item -LiteralPath $legacyLastSuccess -Force
 }
 if ((Test-Path -LiteralPath $stateDir) -and
     -not (Get-ChildItem -LiteralPath $stateDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {

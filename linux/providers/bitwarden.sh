@@ -69,12 +69,18 @@ provider_authenticate() {
             die "Bitwarden is not logged in. Run 'bw login' first."
             ;;
         locked)
+            if [ "${NON_INTERACTIVE:-false}" = true ]; then
+                die "Bitwarden requires an interactive unlock; run 'sshwitch' to refresh credentials."
+            fi
             log_info "Unlocking Bitwarden vault..."
             provider_unlock ||
                 die "Unable to unlock Bitwarden vault. Check your master password and try again."
             ;;
         unlocked)
             if [ -z "${BW_SESSION:-}" ]; then
+                if [ "${NON_INTERACTIVE:-false}" = true ]; then
+                    die "Bitwarden has no session key; run 'sshwitch' to refresh credentials."
+                fi
                 log_info "Requesting a Bitwarden session token..."
                 provider_unlock ||
                     die "Unable to unlock Bitwarden vault. Check your master password and try again."
@@ -86,20 +92,26 @@ provider_authenticate() {
     esac
 }
 
-provider_list_records() {
-    destination=$1
-
+provider_sync() {
     log_info "Syncing Bitwarden vault..."
     bw sync >/dev/null ||
         die "Bitwarden sync failed; existing SSH configuration was not changed."
+}
+
+provider_list_records() {
+    destination=$1
+    trace_was_enabled=false
+    case $- in
+        *x*) trace_was_enabled=true; set +x ;;
+    esac
 
     log_info "Fetching SSH key items..."
-    raw_items=$(bw list items) ||
+    SSHWITCH_BITWARDEN_ITEMS=$(bw list items) ||
         die "Unable to list Bitwarden items; existing SSH configuration was not changed."
-    printf '%s' "$raw_items" | jq -e 'type == "array"' >/dev/null ||
+    printf '%s' "$SSHWITCH_BITWARDEN_ITEMS" | jq -e 'type == "array"' >/dev/null ||
         die "Bitwarden returned invalid item data; existing SSH configuration was not changed."
 
-    printf '%s' "$raw_items" | jq -c '
+    printf '%s' "$SSHWITCH_BITWARDEN_ITEMS" | jq -c '
         def field($names):
           (.fields // [] |
             map(select((.name | ascii_downcase) as $name | $names | index($name))) |
@@ -142,20 +154,35 @@ provider_list_records() {
         }
     ' >"$destination" || die "Unable to normalize Bitwarden SSH items."
     chmod 600 "$destination"
+    [ "$trace_was_enabled" = false ] || set -x
 }
 
 provider_export_private_key() {
     source_id=$1
     destination=$2
+    trace_was_enabled=false
+    case $- in
+        *x*) trace_was_enabled=true; set +x ;;
+    esac
 
-    item_json=$(bw get item "$source_id") ||
-        die "Unable to retrieve a Bitwarden SSH item for private-key export."
-    private_key=$(printf '%s' "$item_json" |
+    export_succeeded=true
+    private_key=$(printf '%s' "${SSHWITCH_BITWARDEN_ITEMS:-[]}" |
         jq -er '
-          select(type == "object" and .type == 5) |
+          .[] | select(.id == $source_id and .type == 5) |
           .sshKey.privateKey |
           select(type == "string" and length > 0)
-        ') || return 2
+        ' --arg source_id "$source_id") || export_succeeded=false
+    if [ "$export_succeeded" = false ]; then
+        unset private_key
+        [ "$trace_was_enabled" = false ] || set -x
+        return 2
+    fi
     printf '%s\n' "$private_key" >"$destination"
     chmod 600 "$destination"
+    unset private_key
+    [ "$trace_was_enabled" = false ] || set -x
+}
+
+provider_clear_sensitive_state() {
+    unset SSHWITCH_BITWARDEN_ITEMS
 }

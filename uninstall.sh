@@ -200,6 +200,7 @@ fi
 
 [ ! -d "$APP_CONFIG_DIR" ] || rm -rf -- "$APP_CONFIG_DIR"
 [ ! -d "$LEGACY_APP_CONFIG_DIR" ] || rm -rf -- "$LEGACY_APP_CONFIG_DIR"
+rm -f "$STATE_DIR/last-success" "$LEGACY_STATE_DIR/last-success"
 if [ -d "$STATE_DIR" ] && directory_is_empty "$STATE_DIR"; then
     rmdir "$STATE_DIR"
 fi

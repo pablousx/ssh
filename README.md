@@ -78,6 +78,7 @@ The current preferences are:
 | `provider` | `bitwarden` | Record source adapter |
 | `identity_backend` | `agent`, `disk` | How OpenSSH uses the identity |
 | `private_key_policy` | `never`, `export` | Whether the provider may export private keys |
+| `auto_sync` | `off`, `daily` | Whether the first shell opened after 24 hours should request a refresh |
 
 Only `agent`/`never` and `disk`/`export` are accepted. Existing
 `agent_mode=bitwarden` and `agent_mode=disk` preferences are mapped at runtime;
@@ -189,6 +190,7 @@ Linux, macOS, and WSL:
 ```sh
 sshwitch
 sshwitch --dry-run
+sshwitch --timings
 sshwitch --version
 ```
 
@@ -197,11 +199,34 @@ Windows:
 ```powershell
 SSHwitch
 SSHwitch -DryRun
+SSHwitch -Timings
 SSHwitch -Version
 ```
 
 A dry run authenticates with the configured provider, generates and validates a staging
 generation, and reports success without replacing active SSH or Git settings.
+
+`--timings`/`-Timings` reports secret-free stage durations for authentication,
+vault synchronization, vault listing, generation, and publication. Provider
+responses, session values, keys, and item metadata are never included.
+
+## Daily automatic sync
+
+Setup can enable an optional `auto_sync=daily` preference. The shell profile
+performs only a timestamp check. If the last successful sync is at least 24
+hours old and `BW_SESSION` is already available, SSHwitch starts a quiet,
+noninteractive sync in the background. Shell startup does not wait for vault
+network access, generation, validation, or publication.
+
+If no session key is available, the profile prints one concise reminder to run
+`sshwitch`/`SSHwitch` interactively. SSHwitch does not persist the Bitwarden
+master password or session key. A failed automatic sync leaves the active
+generation and last-success timestamp unchanged, so a later shell can retry.
+
+The optimized generation path lists agent identities once and reuses the
+in-memory Bitwarden list response for explicit disk-mode exports. Private keys
+remain inside adapter memory until written directly to the restricted staged
+generation; canonical records and timing output remain secret-free.
 
 ## Git SSH signing
 
@@ -270,7 +295,7 @@ Linux, macOS, and WSL:
 |---|---|
 | `~/.ssh/sshwitch/current/` | Active generated config, keys, and manifest |
 | `~/.config/sshwitch/config` | Preferences, or `$XDG_CONFIG_HOME` |
-| `~/.local/state/sshwitch/` | Lock, backups, bridge PID, and Git restoration state |
+| `~/.local/state/sshwitch/` | Lock, last-success timestamp, backups, bridge PID, and Git restoration state |
 | `~/.ssh/sshwitch-env.sh` | Shell functions and agent environment |
 
 Windows:
@@ -279,7 +304,7 @@ Windows:
 |---|---|
 | `~\.ssh\sshwitch\current\` | Active generated config, keys, and manifest |
 | `%APPDATA%\sshwitch\config.json` | Preferences |
-| `%LOCALAPPDATA%\sshwitch-state\` | Lock, backups, and Git restoration state |
+| `%LOCALAPPDATA%\sshwitch-state\` | Lock, last-success timestamp, backups, and Git restoration state |
 | `%LOCALAPPDATA%\sshwitch\` | Installed scripts |
 
 ### Migration from Sync-SSH

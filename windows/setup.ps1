@@ -14,6 +14,7 @@ function Get-CurrentPreferences {
         provider       = "bitwarden"
         identity_backend = ""
         private_key_policy = ""
+        auto_sync      = "off"
     }
     $legacyAgentMode = ""
     if (Test-Path -LiteralPath $Path) {
@@ -23,7 +24,8 @@ function Get-CurrentPreferences {
             "keep_alive",
             "provider",
             "identity_backend",
-            "private_key_policy"
+            "private_key_policy",
+            "auto_sync"
         )) {
             $property = $saved.PSObject.Properties[$name]
             if ($property -and $property.Value) { $preferences[$name] = [string]$property.Value }
@@ -70,6 +72,23 @@ function Read-PreservedOption {
     }
 }
 
+function Read-AutoSyncOption {
+    param([string]$Current)
+    while ($true) {
+        $answer = (Read-Host (
+                "3. Sync once daily after the first shell opens? Current: $Current. " +
+                "(yes [y], no [n], preserve [s]) [s]"
+            )).Trim().ToLowerInvariant()
+        if (-not $answer) { $answer = "s" }
+        switch ($answer) {
+            { $_ -in @("y", "yes") } { return "daily" }
+            { $_ -in @("n", "no") } { return "off" }
+            { $_ -in @("s", "skip", "preserve") } { return $Current }
+            default { Write-Host "Enter y, n, or s." -ForegroundColor Red }
+        }
+    }
+}
+
 function Add-ToProfile {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -100,15 +119,23 @@ function Add-ToProfile {
     }
 
     $sourceLine = ". `"$ScriptPath`""
+    $autoSyncLine = "Invoke-SSHwitchAutoSync"
     $profileContent = Get-Content -LiteralPath $profilePath -Raw -ErrorAction SilentlyContinue
     if ($profileContent -notmatch [regex]::Escape($sourceLine)) {
         [System.IO.File]::AppendAllText(
             $profilePath,
-            "`r`n# Added by SSHwitch setup`r`n$sourceLine`r`n",
+            "`r`n# Added by SSHwitch setup`r`n$sourceLine`r`n$autoSyncLine`r`n",
             (New-Object System.Text.UTF8Encoding($false))
         )
         Write-Host "Added SSHwitch to PowerShell profile: $profilePath" -ForegroundColor Green
     } else {
+        if ($profileContent -notmatch "(?m)^$([regex]::Escape($autoSyncLine))\s*$") {
+            [System.IO.File]::AppendAllText(
+                $profilePath,
+                "$autoSyncLine`r`n",
+                (New-Object System.Text.UTF8Encoding($false))
+            )
+        }
         Write-Host "PowerShell profile is already configured." -ForegroundColor Gray
     }
 }
@@ -133,6 +160,9 @@ if ($currentCombination -notin @("agent:never", "disk:export")) {
     throw "Invalid identity backend/private-key policy combination: " +
         "$($current.identity_backend)/$($current.private_key_policy)"
 }
+if ($current.auto_sync -notin @("off", "daily")) {
+    throw "Invalid auto_sync preference: $($current.auto_sync)"
+}
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Source provider: $($current.provider)" -ForegroundColor Gray
@@ -141,8 +171,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 
 $gitSign = Read-PreservedOption "1. Enable Git commit signing via SSH?" $current.commit_signing
 $keepAlive = Read-PreservedOption "2. Enable SSH KeepAlive?" $current.keep_alive
+$autoSync = Read-AutoSyncOption $current.auto_sync
 
-Write-Host "`n3. Identity backend:" -ForegroundColor Cyan
+Write-Host "`n4. Identity backend:" -ForegroundColor Cyan
 Write-Host "   [1] $($current.provider) SSH Agent (recommended)"
 Write-Host "   [2] Export private keys to the tool-owned directory (higher risk)"
 Write-Host "   [s] Preserve current backend ($($current.identity_backend))"
@@ -178,6 +209,7 @@ Write-Host "  SSH KeepAlive:   $keepAlive"
 Write-Host "  Provider:        $($current.provider)"
 Write-Host "  Identity backend: $identityBackend"
 Write-Host "  Private keys:    $privateKeyPolicy"
+Write-Host "  Daily auto-sync: $autoSync"
 $confirmation = (Read-Host "Proceed? (y/n) [y]").Trim().ToLowerInvariant()
 if (-not $confirmation) { $confirmation = "y" }
 if ($confirmation -notin @("y", "yes")) {
@@ -201,6 +233,7 @@ $preferences = [ordered]@{
     private_key_policy = $privateKeyPolicy
     commit_signing = $gitSign
     keep_alive     = $keepAlive
+    auto_sync      = $autoSync
 }
 $temporaryPreferences = Join-Path $preferencesDir (".config." + [Guid]::NewGuid().ToString("N"))
 Write-Utf8NoBom -Path $temporaryPreferences -Content (($preferences | ConvertTo-Json) + "`n")

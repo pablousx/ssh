@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+if [ -n "${MOCK_SSH_ADD_CALL_LOG:-}" ]; then
+    printf '%s\n' "$*" >>"$MOCK_SSH_ADD_CALL_LOG"
+fi
+
 [ "${1:-}" = "-L" ] || exit 2
 [ "${MOCK_AGENT_FAILURE:-0}" = "0" ] || exit 2
 if [ "${MOCK_AGENT_MISMATCH:-0}" = "1" ]; then

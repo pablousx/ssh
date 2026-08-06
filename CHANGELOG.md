@@ -6,6 +6,18 @@ release pull request.
 
 ## Unreleased
 
+### Added
+
+- Optional once-daily, non-blocking first-shell synchronization using an
+  existing Bitwarden session, with interactive reminders when unlock is needed.
+- Secret-free per-stage timing output through `--timings` and `-Timings`.
+
+### Changed
+
+- Synchronization now lists agent identities once per generation, reduces
+  repeated POSIX JSON parsing, and reuses the in-memory Bitwarden list response
+  for explicit disk-mode private-key exports.
+
 ### Fixed
 
 - Missing managed Git signing keys now restore SSHwitch-owned global Git

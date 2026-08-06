@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 Describe "SSHwitch source safety" {
     BeforeAll {
-        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).ProviderPath
         $script:SyncScript = Join-Path $script:RepoRoot "windows\sync.ps1"
         $openSshPath = Join-Path $env:WINDIR "System32\OpenSSH"
         if (Test-Path -LiteralPath $openSshPath) {
@@ -151,6 +151,7 @@ Describe "SSHwitch source safety" {
         if ($json -match "PRIVATE-CONFORMANCE-SECRET" -or $json -match "private_key") {
             throw "Bitwarden adapter exposed private-key material in canonical records."
         }
+        Clear-ProviderSensitiveState
     }
 
     It "maps legacy agent_mode preferences to the provider-neutral model" {
@@ -399,11 +400,16 @@ Describe "SSHwitch source safety" {
             [System.IO.Directory]::CreateDirectory($temporary) | Out-Null
             function global:ssh-keygen { $global:LASTEXITCODE = 0 }
             function global:ssh { $global:LASTEXITCODE = 0 }
-            function global:bw {
-                $global:LASTEXITCODE = 0
-                return @"
-{"id":"disk-host","type":5,"name":"disk-host","sshKey":{"publicKey":"test","privateKey":"-----BEGIN OPENSSH PRIVATE KEY-----\ntest-only\n-----END OPENSSH PRIVATE KEY-----"}}
-"@
+            $script:BitwardenItemsById = @{
+                "disk-host" = [pscustomobject]@{
+                    id = "disk-host"
+                    type = 5
+                    name = "disk-host"
+                    sshKey = [pscustomobject]@{
+                        publicKey = "test"
+                        privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----`ntest-only`n-----END OPENSSH PRIVATE KEY-----"
+                    }
+                }
             }
             $record = New-TestProviderRecord -Name "disk-host" -Hostname "example.com"
             $staging = Join-Path $temporary "disk-stage"
@@ -422,7 +428,69 @@ Describe "SSHwitch source safety" {
                 throw "Disk-mode private key contains a UTF-8 BOM."
             }
         } finally {
+            Clear-ProviderSensitiveState
             Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "lists agent identities once per generated configuration" {
+        $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("sshwitch-test-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            [System.IO.Directory]::CreateDirectory($temporary) | Out-Null
+            function global:ssh-keygen { $global:LASTEXITCODE = 0 }
+            function global:ssh { $global:LASTEXITCODE = 0 }
+            $script:sshAddCalls = 0
+            function global:ssh-add {
+                $script:sshAddCalls++
+                $global:LASTEXITCODE = 0
+                return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestFixtureOnly sshwitch-test"
+            }
+            $hostRecord = New-TestProviderRecord -Name "production" -Hostname "example.com"
+            $signRecord = New-TestProviderRecord -Name "signing" -Hostname "" -Role "git-sign"
+            $signRecord.git_principal = "developer@example.com"
+            $staging = Join-Path $temporary "agent-snapshot-stage"
+            [System.IO.Directory]::CreateDirectory($staging) | Out-Null
+            $preferences = [pscustomobject]@{
+                provider = "bitwarden"
+                identity_backend = "agent"
+                private_key_policy = "never"
+                keep_alive = "skip"
+            }
+            New-GeneratedFiles -Records @($hostRecord, $signRecord) -Paths @{} `
+                -Preferences $preferences -StagingDir $staging | Out-Null
+            if ($script:sshAddCalls -ne 1) {
+                throw "Agent identities were queried $script:sshAddCalls times."
+            }
+        } finally {
+            Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "reports a due daily auto-sync without blocking for credentials" {
+        $previousAppData = $env:APPDATA
+        $previousLocalAppData = $env:LOCALAPPDATA
+        $previousSession = $env:BW_SESSION
+        try {
+            $env:APPDATA = Join-Path $TestDrive "appdata"
+            $env:LOCALAPPDATA = Join-Path $TestDrive "localappdata"
+            $preferencesDir = Join-Path $env:APPDATA "sshwitch"
+            [System.IO.Directory]::CreateDirectory($preferencesDir) | Out-Null
+            Write-Utf8NoBom -Path (Join-Path $preferencesDir "config.json") -Content (
+                '{"auto_sync":"daily"}' + "`n"
+            )
+            Remove-Item Env:BW_SESSION -ErrorAction SilentlyContinue
+            $notice = (& { Invoke-SSHwitchAutoSync } 6>&1 | Out-String)
+            if ($notice -notmatch "automatic sync is due") {
+                throw "A due automatic sync did not report the interactive action."
+            }
+        } finally {
+            $env:APPDATA = $previousAppData
+            $env:LOCALAPPDATA = $previousLocalAppData
+            if ($null -eq $previousSession) {
+                Remove-Item Env:BW_SESSION -ErrorAction SilentlyContinue
+            } else {
+                $env:BW_SESSION = $previousSession
+            }
         }
     }
 }

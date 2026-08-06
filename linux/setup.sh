@@ -90,11 +90,29 @@ prompt_option() {
     done
 }
 
+prompt_auto_sync() {
+    current_value=$1
+    while :; do
+        printf "3. Sync once daily after the first shell opens? Current: %s (yes [y], no [n], preserve [s]) [s]: " \
+            "$current_value" >&2
+        read -r user_input
+        user_input=$(printf '%s' "$user_input" | tr '[:upper:]' '[:lower:]')
+        [ -n "$user_input" ] || user_input="s"
+        case "$user_input" in
+            y|yes) printf "daily\n"; return ;;
+            n|no) printf "off\n"; return ;;
+            s|skip|preserve) printf "%s\n" "$current_value"; return ;;
+            *) printf "Invalid option. Use 'y', 'n', or 's'.\n" >&2 ;;
+        esac
+    done
+}
+
 current_signing=$(read_preference commit_signing skip)
 current_keep_alive=$(read_preference keep_alive skip)
 current_provider=$(read_preference provider bitwarden)
 current_identity_backend=$(read_preference identity_backend "")
 current_private_key_policy=$(read_preference private_key_policy "")
+current_auto_sync=$(read_preference auto_sync off)
 legacy_agent_mode=$(read_preference agent_mode "")
 if [ -z "$current_identity_backend" ]; then
     case "$legacy_agent_mode" in
@@ -120,6 +138,10 @@ case "$current_identity_backend:$current_private_key_policy" in
         exit 1
         ;;
 esac
+case "$current_auto_sync" in off|daily) ;; *)
+    printf "Invalid auto_sync preference: %s\n" "$current_auto_sync" >&2
+    exit 1
+esac
 
 printf "========================================\n"
 printf "  SSHwitch Interactive Setup\n"
@@ -129,8 +151,9 @@ printf "Source provider: %s\n\n" "$current_provider"
 
 GIT_SIGN=$(prompt_option "1. Enable Git commit signing via SSH? Current: $current_signing" "$current_signing")
 KEEP_ALIVE=$(prompt_option "2. Enable SSH KeepAlive? Current: $current_keep_alive" "$current_keep_alive")
+AUTO_SYNC=$(prompt_auto_sync "$current_auto_sync")
 
-printf "\n3. Identity backend:\n"
+printf "\n4. Identity backend:\n"
 if [ "$IS_WSL" = true ]; then
     printf "   [1] %s SSH Agent via the Windows pipe bridge (recommended)\n" "$current_provider"
 else
@@ -174,6 +197,7 @@ printf "  SSH KeepAlive:   %s\n" "$KEEP_ALIVE"
 printf "  Provider:        %s\n" "$current_provider"
 printf "  Identity backend:%s\n" " $IDENTITY_BACKEND"
 printf "  Private keys:    %s\n" "$PRIVATE_KEY_POLICY"
+printf "  Daily auto-sync: %s\n" "$AUTO_SYNC"
 printf "Proceed? (y/n) [y]: "
 read -r confirmation
 confirmation=$(printf '%s' "$confirmation" | tr '[:upper:]' '[:lower:]')
@@ -212,6 +236,7 @@ preferences_temp="$APP_CONFIG_DIR/.config.$$"
     printf "private_key_policy=%s\n" "$PRIVATE_KEY_POLICY"
     printf "commit_signing=%s\n" "$GIT_SIGN"
     printf "keep_alive=%s\n" "$KEEP_ALIVE"
+    printf "auto_sync=%s\n" "$AUTO_SYNC"
 } >"$preferences_temp"
 chmod 600 "$preferences_temp"
 mv "$preferences_temp" "$PREFERENCES_FILE"
@@ -323,6 +348,31 @@ sshwitch() {
 alias sync-ssh='sshwitch'
 EOF
 fi
+cat >>"$env_temp" <<EOF
+
+sshwitch_auto_sync() {
+    auto_sync_value=\$(awk -F= '\$1 == "auto_sync" { print \$2; exit }' "$PREFERENCES_FILE")
+    [ "\$auto_sync_value" = "daily" ] || return 0
+
+    auto_sync_state_dir="\${XDG_STATE_HOME:-\$HOME/.local/state}/sshwitch"
+    auto_sync_last_file="\$auto_sync_state_dir/last-success"
+    auto_sync_now=\$(date +%s)
+    auto_sync_last=0
+    if [ -f "\$auto_sync_last_file" ]; then
+        auto_sync_last=\$(cat "\$auto_sync_last_file" 2>/dev/null || printf '0')
+        case "\$auto_sync_last" in *[!0-9]*|"") auto_sync_last=0 ;; esac
+    fi
+    [ \$((auto_sync_now - auto_sync_last)) -ge 86400 ] || return 0
+
+    if [ -n "\${BW_SESSION:-}" ]; then
+        nohup sh "$SSHWITCH_SH" --auto </dev/null >/dev/null 2>&1 &
+    else
+        printf 'SSHwitch automatic sync is due; run sshwitch to unlock Bitwarden and sync.\n' >&2
+    fi
+}
+
+sshwitch_auto_sync
+EOF
 chmod 600 "$env_temp"
 mv "$env_temp" "$CONFIG_FILE"
 
