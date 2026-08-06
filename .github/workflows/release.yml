@@ -73,7 +73,22 @@ jobs:
         env:
           TAG_NAME: ${{ steps.prepare.outputs.tag }}
         run: |
-          mkdir -p dist/sshwitch
+          mkdir -p dist/sshwitch dist/installers
+          sed "s/__SSHWITCH_RELEASE_VERSION__/${TAG_NAME}/g" install.sh >dist/installers/install.sh
+          sed "s/__SSHWITCH_RELEASE_VERSION__/${TAG_NAME}/g" install.ps1 >dist/installers/install.ps1
+          cp uninstall.sh uninstall.ps1 dist/installers/
+          if grep -qF '__SSHWITCH_RELEASE_VERSION__' dist/installers/install.sh dist/installers/install.ps1; then
+            printf 'Unable to embed release version %s in installer assets.\n' "${TAG_NAME}" >&2
+            exit 1
+          fi
+          grep -qF "RELEASE_VERSION='${TAG_NAME}'" dist/installers/install.sh || {
+            printf 'POSIX installer asset does not contain release version %s.\n' "${TAG_NAME}" >&2
+            exit 1
+          }
+          grep -qF "\$releaseVersion = \"${TAG_NAME}\"" dist/installers/install.ps1 || {
+            printf 'PowerShell installer asset does not contain release version %s.\n' "${TAG_NAME}" >&2
+            exit 1
+          }
           cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
           tar -C dist -czf "dist/sshwitch-${TAG_NAME}.tar.gz" sshwitch
           (cd dist && zip -qr "sshwitch-${TAG_NAME}.zip" sshwitch)
@@ -132,10 +147,10 @@ jobs:
             --verify-tag \
             --generate-notes \
             --notes "${release_notes}" \
-            install.sh \
-            install.ps1 \
-            uninstall.sh \
-            uninstall.ps1 \
+            dist/installers/install.sh \
+            dist/installers/install.ps1 \
+            dist/installers/uninstall.sh \
+            dist/installers/uninstall.ps1 \
             "dist/sshwitch-${TAG_NAME}.tar.gz" \
             "dist/sshwitch-${TAG_NAME}.tar.gz.sha256" \
             "dist/sshwitch-${TAG_NAME}.zip" \

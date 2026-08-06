@@ -1,11 +1,15 @@
 $ErrorActionPreference = "Stop"
 
+$releaseVersion = "__SSHWITCH_RELEASE_VERSION__"
 $version = if ($env:SSHWITCH_VERSION) {
     $env:SSHWITCH_VERSION
 } elseif ($env:SYNC_SSH_VERSION) {
     $env:SYNC_SSH_VERSION
 } else {
-    "v1.1.0"
+    $releaseVersion
+}
+if ($version -eq $releaseVersion) {
+    throw "Installer release version was not embedded. Set SSHWITCH_VERSION explicitly."
 }
 $repository = "pablousx/sshwitch"
 $installDir = Join-Path $env:LOCALAPPDATA "sshwitch"

@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-v1.1.0}}"
+RELEASE_VERSION='__SSHWITCH_RELEASE_VERSION__'
+VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-$RELEASE_VERSION}}"
 REPOSITORY="pablousx/sshwitch"
 INSTALL_PARENT="$HOME/.local/share"
 INSTALL_DIR="$INSTALL_PARENT/sshwitch"
@@ -16,6 +17,11 @@ cleanup() {
 }
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
+
+if [ "$VERSION" = "$RELEASE_VERSION" ]; then
+    printf "Error: installer release version was not embedded. Set SSHWITCH_VERSION explicitly.\n" >&2
+    exit 1
+fi
 
 for command_name in curl tar; do
     command -v "$command_name" >/dev/null 2>&1 || {

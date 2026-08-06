@@ -41,6 +41,7 @@ new_home() {
     unset MOCK_FAIL_UNLOCK MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
     unset MOCK_BW_STATUS MOCK_BW_SESSION
     unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH MOCK_CURL_FAILURE MOCK_UNAME_S
+    unset SSHWITCH_VERSION SYNC_SSH_VERSION
 }
 
 write_preferences() {
@@ -165,16 +166,25 @@ pass "interactive setup writes version 2 preferences and one portable profile en
 new_home macos_installer
 export MOCK_UNAME_S=Darwin
 export MOCK_CURL_FAILURE=1
-if installer_output=$(sh "$REPO_ROOT/install.sh" 2>&1); then
+if installer_output=$(SSHWITCH_VERSION=v9.8.7 sh "$REPO_ROOT/install.sh" 2>&1); then
     fail "Installer unexpectedly succeeded with a failed download"
 fi
-printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch v1.1.0" ||
-    fail "Installer rejected macOS or selected the wrong default release"
+printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch v9.8.7" ||
+    fail "Installer rejected macOS or ignored the embedded release version"
 if printf '%s' "$installer_output" | grep -qF "supports Linux"; then
     fail "Installer reported macOS as unsupported"
 fi
 assert_no_file "$HOME/.local/share/sshwitch"
 pass "release installer accepts macOS and fails safely on download errors"
+
+new_home unstamped_installer
+if installer_output=$(sh "$REPO_ROOT/install.sh" 2>&1); then
+    fail "Unstamped installer unexpectedly attempted an installation"
+fi
+printf '%s' "$installer_output" | grep -qF "installer release version was not embedded" ||
+    fail "Unstamped installer did not fail with a concise release-version error"
+assert_no_file "$HOME/.local/share/sshwitch"
+pass "unstamped release installer fails before downloading"
 
 new_home macos_setup
 export SHELL=/bin/zsh

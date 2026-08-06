@@ -4,6 +4,14 @@ All notable changes are documented here. Versions follow Semantic Versioning,
 and release entries are generated from Conventional Commits by the reviewed
 release pull request.
 
+## Unreleased
+
+### Fixed
+
+- Release installer assets now embed their own tag instead of falling back to
+  the stale `v1.1.0`, so both pinned and `latest` installation URLs download
+  the matching release archives.
+
 ## [1.2.1](https://github.com/pablousx/sshwitch/compare/v1.2.0...v1.2.1) (2026-08-05)
 
 
