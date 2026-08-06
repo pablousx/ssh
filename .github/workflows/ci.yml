@@ -39,22 +39,18 @@ jobs:
       - name: Run POSIX integration tests
         run: tests/linux/run.sh
 
-  powershell:
-    strategy:
-      fail-fast: false
-      matrix:
-        shell: [powershell, pwsh]
+  windows-powershell-51:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install test and analysis modules
-        shell: ${{ matrix.shell }}
+        shell: powershell
         run: |
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
       - name: Parse PowerShell scripts
-        shell: ${{ matrix.shell }}
+        shell: powershell
         run: |
           $failed = $false
           Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
@@ -68,13 +64,49 @@ jobs:
           }
           if ($failed) { exit 1 }
       - name: Run PSScriptAnalyzer
-        shell: ${{ matrix.shell }}
+        shell: powershell
         run: |
           $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
           $issues | Format-Table
           if ($issues) { exit 1 }
       - name: Run PowerShell tests
-        shell: ${{ matrix.shell }}
+        shell: powershell
+        run: |
+          $result = Invoke-Pester tests/powershell/SSHwitch.Tests.ps1 -PassThru
+          if ($result.FailedCount -gt 0) { exit 1 }
+
+  powershell-7:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install test and analysis modules
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) {
+              $failed = $true
+              $errors | Write-Error
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          $issues | Format-Table
+          if ($issues) { exit 1 }
+      - name: Run PowerShell tests
+        shell: pwsh
         run: |
           $result = Invoke-Pester tests/powershell/SSHwitch.Tests.ps1 -PassThru
           if ($result.FailedCount -gt 0) { exit 1 }
