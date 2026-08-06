@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+message_file=$1
+subject=$(sed -n '1p' "$message_file")
+
+if ! printf '%s\n' "$subject" | LC_ALL=C grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9._/-]*\))?!?: .{10,72}$'; then
+  printf '%s\n' \
+    'Commit subject must use Conventional Commits and a 10-72 character description.' \
+    'Example: feat(sync): add daily automatic synchronization' >&2
+  exit 1
+fi

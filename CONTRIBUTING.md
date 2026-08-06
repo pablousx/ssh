@@ -1,5 +1,18 @@
 # Contributing
 
+## Commit messages
+
+Enable the repository's commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Commit subjects must use Conventional Commits with a concrete 10-72 character
+description, for example `feat(sync): add daily automatic synchronization`.
+The release automation uses `feat`, `fix`, and breaking-change markers to select
+the next version.
+
 ## Local checks
 
 Linux, macOS, and WSL changes should pass:

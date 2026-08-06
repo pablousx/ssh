@@ -165,6 +165,17 @@ implementation has the same bug. Add a parity regression test when practical.
 - Do not commit, tag, push, or publish a release unless the user explicitly
   authorizes that repository/release action.
 
+## Commit messages
+
+- Before committing, inspect the staged diff and summarize its concrete outcome.
+- Use a Conventional Commit subject accepted by `.githooks/commit-msg`, such as
+  `feat(sync): add daily automatic synchronization`.
+- Do not use vague subjects such as `update files`, `misc changes`, or
+  `improvements`. Use `feat`, `fix`, or a breaking-change marker when the commit
+  should drive a release; release automation derives versions from these types.
+- Keep the subject description between 10 and 72 characters. Do not bypass the
+  commit hook with `--no-verify`.
+
 ## Required validation
 
 Run the relevant subset during iteration and the full set before handoff.
