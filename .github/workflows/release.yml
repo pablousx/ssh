@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths: [VERSION]
 
 permissions:
   contents: write
@@ -19,8 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Prepare release
-        id: prepare
+      - name: Build and publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -32,118 +31,79 @@ jobs:
             printf 'VERSION must contain X.Y.Z, got: %s\n' "${version}" >&2
             exit 1
           fi
-
           tag_name="v${version}"
-          printf 'tag=%s\n' "${tag_name}" >>"${GITHUB_OUTPUT}"
 
           if gh release view "${tag_name}" >/dev/null 2>&1; then
-            printf 'release=false\n' >>"${GITHUB_OUTPUT}"
             printf 'Release %s already exists; nothing to publish.\n' "${tag_name}"
             exit 0
           fi
 
-          remote_main_line=$(git ls-remote origin refs/heads/main) || {
-            printf 'Unable to resolve the current main commit.\n' >&2
+          mkdir -p dist/sshwitch dist/installers
+          sed "s/__SSHWITCH_RELEASE_VERSION__/${tag_name}/g" install.sh >dist/installers/install.sh
+          sed "s/__SSHWITCH_RELEASE_VERSION__/${tag_name}/g" install.ps1 >dist/installers/install.ps1
+          cp uninstall.sh uninstall.ps1 dist/installers/
+
+          if grep -qF '__SSHWITCH_RELEASE_VERSION__' dist/installers/install.sh dist/installers/install.ps1; then
+            printf 'Unable to embed release version %s in installer assets.\n' "${tag_name}" >&2
+            exit 1
+          fi
+          grep -qF "RELEASE_VERSION='${tag_name}'" dist/installers/install.sh || {
+            printf 'POSIX installer asset does not contain release version %s.\n' "${tag_name}" >&2
             exit 1
           }
-          remote_main=$(printf '%s\n' "${remote_main_line}" | awk 'NR == 1 { print $1 }')
-          if [ -z "${remote_main}" ]; then
-            printf 'The main branch did not resolve to a commit.\n' >&2
+          grep -qF "\$releaseVersion = \"${tag_name}\"" dist/installers/install.ps1 || {
+            printf 'PowerShell installer asset does not contain release version %s.\n' "${tag_name}" >&2
+            exit 1
+          }
+
+          smoke_home="${RUNNER_TEMP}/sshwitch-installer-smoke"
+          mkdir -p "${smoke_home}"
+          if installer_output=$(HOME="${smoke_home}" MOCK_UNAME_S=Linux MOCK_CURL_FAILURE=1 \
+            PATH="${GITHUB_WORKSPACE}/tests/mocks:${PATH}" sh dist/installers/install.sh 2>&1); then
+            printf 'Stamped POSIX installer unexpectedly succeeded during its failure-path smoke test.\n' >&2
             exit 1
           fi
-          if [ "${remote_main}" != "${GITHUB_SHA}" ]; then
-            printf 'release=false\n' >>"${GITHUB_OUTPUT}"
-            printf 'A newer main commit exists; leaving release creation to that run.\n'
-            exit 0
+          if ! printf '%s\n' "${installer_output}" | grep -qF "Downloading SSHwitch ${tag_name}"; then
+            printf 'Stamped POSIX installer did not select release %s.\n' "${tag_name}" >&2
+            exit 1
           fi
+
+          cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
+          tar -C dist -czf "dist/sshwitch-${tag_name}.tar.gz" sshwitch
+          (cd dist && zip -qr "sshwitch-${tag_name}.zip" sshwitch)
+          (cd dist && sha256sum "sshwitch-${tag_name}.tar.gz" >"sshwitch-${tag_name}.tar.gz.sha256")
+          (cd dist && sha256sum "sshwitch-${tag_name}.zip" >"sshwitch-${tag_name}.zip.sha256")
 
           if git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
             tagged_commit=$(git rev-list -n 1 "${tag_name}")
             if [ "${tagged_commit}" != "${GITHUB_SHA}" ]; then
-              printf 'Tag %s exists without a release at another commit.\n' "${tag_name}" >&2
+              printf 'Tag %s already points to another commit.\n' "${tag_name}" >&2
               exit 1
             fi
-            printf 'create_tag=false\n' >>"${GITHUB_OUTPUT}"
           else
-            printf 'create_tag=true\n' >>"${GITHUB_OUTPUT}"
+            git tag "${tag_name}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${tag_name}"
           fi
-          printf 'release=true\n' >>"${GITHUB_OUTPUT}"
-      - name: Build release archives
-        if: steps.prepare.outputs.release == 'true'
-        env:
-          TAG_NAME: ${{ steps.prepare.outputs.tag }}
-        run: |
-          mkdir -p dist/sshwitch dist/installers
-          sed "s/__SSHWITCH_RELEASE_VERSION__/${TAG_NAME}/g" install.sh >dist/installers/install.sh
-          sed "s/__SSHWITCH_RELEASE_VERSION__/${TAG_NAME}/g" install.ps1 >dist/installers/install.ps1
-          cp uninstall.sh uninstall.ps1 dist/installers/
-          if grep -qF '__SSHWITCH_RELEASE_VERSION__' dist/installers/install.sh dist/installers/install.ps1; then
-            printf 'Unable to embed release version %s in installer assets.\n' "${TAG_NAME}" >&2
-            exit 1
-          fi
-          grep -qF "RELEASE_VERSION='${TAG_NAME}'" dist/installers/install.sh || {
-            printf 'POSIX installer asset does not contain release version %s.\n' "${TAG_NAME}" >&2
-            exit 1
-          }
-          grep -qF "\$releaseVersion = \"${TAG_NAME}\"" dist/installers/install.ps1 || {
-            printf 'PowerShell installer asset does not contain release version %s.\n' "${TAG_NAME}" >&2
-            exit 1
-          }
-          cp -R linux windows providers README.md ROADMAP.md LICENSE SECURITY.md CHANGELOG.md VERSION dist/sshwitch/
-          tar -C dist -czf "dist/sshwitch-${TAG_NAME}.tar.gz" sshwitch
-          (cd dist && zip -qr "sshwitch-${TAG_NAME}.zip" sshwitch)
-          (cd dist && sha256sum "sshwitch-${TAG_NAME}.tar.gz" > "sshwitch-${TAG_NAME}.tar.gz.sha256")
-          (cd dist && sha256sum "sshwitch-${TAG_NAME}.zip" > "sshwitch-${TAG_NAME}.zip.sha256")
-      - name: Confirm release commit
-        if: steps.prepare.outputs.release == 'true'
-        id: confirm
-        run: |
-          remote_main_line=$(git ls-remote origin refs/heads/main) || {
-            printf 'Unable to recheck the current main commit.\n' >&2
-            exit 1
-          }
-          remote_main=$(printf '%s\n' "${remote_main_line}" | awk 'NR == 1 { print $1 }')
-          if [ -z "${remote_main}" ]; then
-            printf 'The main branch did not resolve to a commit.\n' >&2
-            exit 1
-          fi
-          if [ "${remote_main}" = "${GITHUB_SHA}" ]; then
-            printf 'publish=true\n' >>"${GITHUB_OUTPUT}"
-          else
-            printf 'publish=false\n' >>"${GITHUB_OUTPUT}"
-            printf 'A newer main commit arrived while building; skipping this release.\n'
-          fi
-      - name: Create release tag
-        if: steps.prepare.outputs.create_tag == 'true' && steps.confirm.outputs.publish == 'true'
-        env:
-          TAG_NAME: ${{ steps.prepare.outputs.tag }}
-        run: |
-          git tag "${TAG_NAME}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${TAG_NAME}"
-      - name: Create GitHub release
-        if: steps.prepare.outputs.release == 'true' && steps.confirm.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.prepare.outputs.tag }}
-        run: |
+
           {
             printf '## Install this release\n\n'
             printf 'Linux, macOS, and WSL:\n\n'
             printf '```sh\n'
             printf 'curl -fsSL https://github.com/%s/releases/download/%s/install.sh | sh\n' \
-              "${GITHUB_REPOSITORY}" "${TAG_NAME}"
+              "${GITHUB_REPOSITORY}" "${tag_name}"
             printf '```\n\n'
             printf 'Windows PowerShell:\n\n'
             printf '```powershell\n'
             printf 'irm https://github.com/%s/releases/download/%s/install.ps1 | iex\n' \
-              "${GITHUB_REPOSITORY}" "${TAG_NAME}"
+              "${GITHUB_REPOSITORY}" "${tag_name}"
             printf '```\n\n'
           } >dist/release-notes.md
           release_notes=$(cat dist/release-notes.md) || {
             printf 'Unable to read generated release instructions.\n' >&2
             exit 1
           }
-          gh release create "${TAG_NAME}" \
+
+          gh release create "${tag_name}" \
             --verify-tag \
             --generate-notes \
             --notes "${release_notes}" \
@@ -151,7 +111,7 @@ jobs:
             dist/installers/install.ps1 \
             dist/installers/uninstall.sh \
             dist/installers/uninstall.ps1 \
-            "dist/sshwitch-${TAG_NAME}.tar.gz" \
-            "dist/sshwitch-${TAG_NAME}.tar.gz.sha256" \
-            "dist/sshwitch-${TAG_NAME}.zip" \
-            "dist/sshwitch-${TAG_NAME}.zip.sha256"
+            "dist/sshwitch-${tag_name}.tar.gz" \
+            "dist/sshwitch-${tag_name}.tar.gz.sha256" \
+            "dist/sshwitch-${tag_name}.zip" \
+            "dist/sshwitch-${tag_name}.zip.sha256"

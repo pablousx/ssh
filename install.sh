@@ -2,6 +2,7 @@
 set -eu
 
 RELEASE_VERSION='__SSHWITCH_RELEASE_VERSION__'
+UNSTAMPED_VERSION='__SSHWITCH_''RELEASE_VERSION__'
 VERSION="${SSHWITCH_VERSION:-${SYNC_SSH_VERSION:-$RELEASE_VERSION}}"
 REPOSITORY="pablousx/sshwitch"
 INSTALL_PARENT="$HOME/.local/share"
@@ -18,17 +19,25 @@ cleanup() {
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
-if [ "$VERSION" = "$RELEASE_VERSION" ]; then
-    printf "Error: installer release version was not embedded. Set SSHWITCH_VERSION explicitly.\n" >&2
-    exit 1
-fi
-
-for command_name in curl tar; do
+for command_name in curl grep tar; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf "Error: required command not found: %s\n" "$command_name" >&2
         exit 1
     }
 done
+
+if [ "$VERSION" = "$UNSTAMPED_VERSION" ]; then
+    if ! latest_release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$REPOSITORY/releases/latest"); then
+        printf "Error: unable to resolve the latest SSHwitch release.\n" >&2
+        exit 1
+    fi
+    VERSION=${latest_release_url##*/}
+fi
+if ! printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+    printf "Error: invalid SSHwitch release version: %s\n" "$VERSION" >&2
+    exit 1
+fi
 
 if command -v sha256sum >/dev/null 2>&1; then
     CHECKSUM_COMMAND="sha256sum"

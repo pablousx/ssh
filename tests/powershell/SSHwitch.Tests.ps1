@@ -43,6 +43,16 @@ Describe "SSHwitch source safety" {
         }
     }
 
+    It "keeps a stamped installer version distinct from the unstamped sentinel" {
+        $installerSource = [System.IO.File]::ReadAllText((Join-Path $script:RepoRoot "install.ps1"))
+        $stampedInstaller = $installerSource.Replace("__SSHWITCH_RELEASE_VERSION__", "v9.8.7")
+        if ($stampedInstaller -notmatch '\$releaseVersion = "v9\.8\.7"' -or
+            $stampedInstaller -match '__SSHWITCH_RELEASE_VERSION__' -or
+            $stampedInstaller -match '\$version -eq "v9\.8\.7"') {
+            throw "Release stamping did not preserve a distinct unstamped-version sentinel."
+        }
+    }
+
     It "rejects control characters in metadata" {
         $threw = $false
         try { Assert-SafeMetadata -Value "example.com`nProxyCommand calc" -Label "HostName" }
@@ -93,7 +103,12 @@ Describe "SSHwitch source safety" {
     It "reports a concise error when Bitwarden unlock fails" {
         function global:Read-Host {
             param([string]$Prompt, [switch]$AsSecureString)
-            return ConvertTo-SecureString "wrong-password" -AsPlainText -Force
+            $securePassword = New-Object System.Security.SecureString
+            foreach ($character in "wrong-password".ToCharArray()) {
+                $securePassword.AppendChar($character)
+            }
+            $securePassword.MakeReadOnly()
+            return $securePassword
         }
         function global:bw {
             if ($args[0] -eq "status") {

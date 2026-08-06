@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -29,29 +33,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install validation tools
-        run: brew install jq shellcheck
+        run: brew install jq
       - name: Check POSIX and Bash syntax
         run: |
           sh -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
           bash -n install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
-      - name: Run ShellCheck
-        run: shellcheck install.sh uninstall.sh linux/setup.sh linux/sync.sh linux/providers/bitwarden.sh tests/linux/run.sh tests/mocks/bw tests/mocks/curl tests/mocks/ssh-add tests/mocks/uname
       - name: Run POSIX integration tests
         run: tests/linux/run.sh
 
-  windows-powershell-51:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install test and analysis modules
+      - name: Validate with Windows PowerShell 5.1
         shell: powershell
         run: |
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
-      - name: Parse PowerShell scripts
-        shell: powershell
-        run: |
           $failed = $false
           Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
             $tokens = $null
@@ -63,31 +62,17 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
-      - name: Run PSScriptAnalyzer
-        shell: powershell
-        run: |
           $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
           $issues | Format-Table
           if ($issues) { exit 1 }
-      - name: Run PowerShell tests
-        shell: powershell
-        run: |
           $result = Invoke-Pester tests/powershell/SSHwitch.Tests.ps1 -PassThru
           if ($result.FailedCount -gt 0) { exit 1 }
-
-  powershell-7:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install test and analysis modules
+      - name: Validate with PowerShell 7
         shell: pwsh
         run: |
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
-      - name: Parse PowerShell scripts
-        shell: pwsh
-        run: |
           $failed = $false
           Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
             $tokens = $null
@@ -99,14 +84,8 @@ jobs:
             }
           }
           if ($failed) { exit 1 }
-      - name: Run PSScriptAnalyzer
-        shell: pwsh
-        run: |
           $issues = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
           $issues | Format-Table
           if ($issues) { exit 1 }
-      - name: Run PowerShell tests
-        shell: pwsh
-        run: |
           $result = Invoke-Pester tests/powershell/SSHwitch.Tests.ps1 -PassThru
           if ($result.FailedCount -gt 0) { exit 1 }

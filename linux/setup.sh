@@ -22,11 +22,11 @@ case "$(uname -s)" in
         ;;
 esac
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname "$0")" && pwd -P)
 if [ "$SCRIPT_DIR" = "$HOME/.local/share/sshwitch" ]; then
     SSHWITCH_SH="$SCRIPT_DIR/sync.sh"
 else
-    REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+    REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd -P)
     SSHWITCH_SH="$REPO_ROOT/linux/sync.sh"
 fi
 
@@ -332,7 +332,10 @@ case "${SHELL:-}" in
     *) PROFILE="$HOME/.profile" ;;
 esac
 [ -f "$PROFILE" ] || : >"$PROFILE"
+# These profile entries must retain $HOME for evaluation by future shells.
+# shellcheck disable=SC2016
 SOURCE_LINE='. "$HOME/.ssh/sshwitch-env.sh"'
+# shellcheck disable=SC2016
 LEGACY_SOURCE_LINE='. "$HOME/.ssh/sync-ssh-env.sh"'
 profile_temp="${PROFILE}.sshwitch-setup.$$"
 awk -v legacy_source="$LEGACY_SOURCE_LINE" '

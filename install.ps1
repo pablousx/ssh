@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+$repository = "pablousx/sshwitch"
 $releaseVersion = "__SSHWITCH_RELEASE_VERSION__"
+$unstampedVersion = "__SSHWITCH_" + "RELEASE_VERSION__"
 $version = if ($env:SSHWITCH_VERSION) {
     $env:SSHWITCH_VERSION
 } elseif ($env:SYNC_SSH_VERSION) {
@@ -8,10 +10,19 @@ $version = if ($env:SSHWITCH_VERSION) {
 } else {
     $releaseVersion
 }
-if ($version -eq $releaseVersion) {
-    throw "Installer release version was not embedded. Set SSHWITCH_VERSION explicitly."
+if ($version -eq $unstampedVersion) {
+    try {
+        $latestRelease = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/$repository/releases/latest" `
+            -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "SSHwitch installer" }
+        $version = [string]$latestRelease.tag_name
+    } catch {
+        throw "Unable to resolve the latest SSHwitch release. $($_.Exception.Message)"
+    }
 }
-$repository = "pablousx/sshwitch"
+if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+    throw "Invalid SSHwitch release version: $version"
+}
 $installDir = Join-Path $env:LOCALAPPDATA "sshwitch"
 $legacyInstallDir = Join-Path $env:LOCALAPPDATA "sync-ssh"
 $installParent = Split-Path $installDir -Parent

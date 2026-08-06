@@ -31,7 +31,7 @@ resolve_symlink_target() {
             *) target_path="$(dirname "$target_path")/$link_target" ;;
         esac
     done
-    target_dir=$(CDPATH= cd -- "$(dirname "$target_path")" && pwd -P) || return 1
+    target_dir=$(CDPATH='' cd -- "$(dirname "$target_path")" && pwd -P) || return 1
     printf '%s/%s\n' "$target_dir" "$(basename "$target_path")"
 }
 

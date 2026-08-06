@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd -P)
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd -P)
 TEST_ROOT=$(mktemp -d)
 PASS_COUNT=0
 
@@ -39,7 +39,7 @@ new_home() {
     export GIT_CONFIG_GLOBAL="$TEST_HOME/gitconfig"
     export BW_SESSION="mock-session-token"
     unset MOCK_FAIL_UNLOCK MOCK_FAIL_SYNC MOCK_FAIL_LIST MOCK_FAIL_GET MOCK_INVALID_JSON MOCK_ITEMS_MODE MOCK_HOSTNAME
-    unset MOCK_BW_STATUS MOCK_BW_SESSION
+    unset MOCK_BW_STATUS MOCK_BW_SESSION MOCK_LATEST_TAG
     unset MOCK_AGENT_FAILURE MOCK_AGENT_MISMATCH MOCK_CURL_FAILURE MOCK_UNAME_S
     unset SSHWITCH_VERSION SYNC_SSH_VERSION
 }
@@ -94,6 +94,7 @@ require_command() { command -v "$1" >/dev/null 2>&1 || fail "Missing provider co
 log_info() { :; }
 die() { fail "$1"; }
 # shellcheck source=../../linux/providers/bitwarden.sh
+# shellcheck disable=SC1091
 . "$REPO_ROOT/linux/providers/bitwarden.sh"
 probe=$(provider_probe)
 printf '%s' "$probe" | jq -e '
@@ -154,19 +155,25 @@ printf "s\ns\n2\nexport private keys\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" >
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "provider=bitwarden"
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "identity_backend=disk"
 assert_contains "$XDG_CONFIG_HOME/sshwitch/config" "private_key_policy=export"
+# The profile entry must retain $HOME for evaluation by future shells.
+# shellcheck disable=SC2016
 assert_contains "$HOME/.bashrc" '. "$HOME/.ssh/sshwitch-env.sh"'
 assert_file "$HOME/.ssh/sshwitch-env.sh"
 for test_shell in sh bash; do
+    # Positional parameters are intentionally expanded by the child shell.
+    # shellcheck disable=SC2016
     "$test_shell" -c '. "$1"; command -v sshwitch >/dev/null; alias sync-ssh >/dev/null' \
         sh "$HOME/.ssh/sshwitch-env.sh" ||
         fail "SSHwitch or legacy shell command was not defined for $test_shell"
 done
 pass "interactive setup writes version 2 preferences and one portable profile entry"
 
-new_home macos_installer
+new_home stamped_installer
 export MOCK_UNAME_S=Darwin
 export MOCK_CURL_FAILURE=1
-if installer_output=$(SSHWITCH_VERSION=v9.8.7 sh "$REPO_ROOT/install.sh" 2>&1); then
+stamped_installer="$TEST_HOME/install.sh"
+sed 's/__SSHWITCH_RELEASE_VERSION__/v9.8.7/g' "$REPO_ROOT/install.sh" >"$stamped_installer"
+if installer_output=$(sh "$stamped_installer" 2>&1); then
     fail "Installer unexpectedly succeeded with a failed download"
 fi
 printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch v9.8.7" ||
@@ -175,16 +182,18 @@ if printf '%s' "$installer_output" | grep -qF "supports Linux"; then
     fail "Installer reported macOS as unsupported"
 fi
 assert_no_file "$HOME/.local/share/sshwitch"
-pass "release installer accepts macOS and fails safely on download errors"
+pass "stamped release installer uses its embedded version"
 
-new_home unstamped_installer
+new_home source_installer
+export MOCK_LATEST_TAG=v9.8.7
+export MOCK_CURL_FAILURE=1
 if installer_output=$(sh "$REPO_ROOT/install.sh" 2>&1); then
-    fail "Unstamped installer unexpectedly attempted an installation"
+    fail "Source installer unexpectedly succeeded with a failed download"
 fi
-printf '%s' "$installer_output" | grep -qF "installer release version was not embedded" ||
-    fail "Unstamped installer did not fail with a concise release-version error"
+printf '%s' "$installer_output" | grep -qF "Downloading SSHwitch v9.8.7" ||
+    fail "Source installer did not resolve the latest release"
 assert_no_file "$HOME/.local/share/sshwitch"
-pass "unstamped release installer fails before downloading"
+pass "source installer resolves the latest release"
 
 new_home macos_setup
 export SHELL=/bin/zsh
@@ -194,10 +203,14 @@ setup_output=$(printf "s\ns\n1\ny\nn\n" | sh "$REPO_ROOT/linux/setup.sh" 2>&1)
 printf '%s' "$setup_output" | grep -qF "Detected OS: macOS" ||
     fail "Setup did not detect macOS"
 expected_store_socket="$HOME/Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock"
+# Positional parameters are intentionally expanded by the child shell.
+# shellcheck disable=SC2016
 sh -c '. "$1"; [ "$SSH_AUTH_SOCK" = "$2" ]' sh \
     "$HOME/.ssh/sshwitch-env.sh" "$expected_store_socket" ||
     fail "macOS App Store agent socket was not selected"
 rmdir "$HOME/Library/Containers/com.bitwarden.desktop"
+# Positional parameters are intentionally expanded by the child shell.
+# shellcheck disable=SC2016
 sh -c '. "$1"; [ "$SSH_AUTH_SOCK" = "$2" ]' sh \
     "$HOME/.ssh/sshwitch-env.sh" "$HOME/.bitwarden-ssh-agent.sock" ||
     fail "macOS DMG agent socket was not selected"

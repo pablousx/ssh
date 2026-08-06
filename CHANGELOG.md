@@ -8,9 +8,14 @@ release pull request.
 
 ### Fixed
 
-- Release installer assets now embed their own tag instead of falling back to
-  the stale `v1.1.0`, so both pinned and `latest` installation URLs download
-  the matching release archives.
+- Stamped release installers now accept their embedded version, and source
+  installers resolve the latest release automatically instead of requiring an
+  environment override.
+- GitHub Actions now runs one Windows job for both supported PowerShell
+  versions, cancels stale CI runs, performs ShellCheck once on Linux, and runs
+  release publishing only when `VERSION` changes.
+- ShellCheck and PSScriptAnalyzer no longer fail on intentional test and
+  portability patterns.
 
 ## [1.3.0](https://github.com/pablousx/sshwitch/compare/v1.2.1...v1.3.0) (2026-08-06)
 

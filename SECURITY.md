@@ -43,14 +43,16 @@ During migration, the prior `sync-ssh` preference, state, installation, profile,
 and generated directories are also treated as narrowly owned legacy paths.
 SSHwitch recognizes only the exact former Include and marker strings.
 
-Installers verify release archive checksums. Conventional Commits on `main`
+Installers verify release archive checksums. Published installer assets embed
+their exact `vX.Y.Z` tag; an unstamped development copy resolves the latest tag
+from GitHub before downloading an archive. Conventional Commits on `main`
 produce a reviewed SemVer release pull request that updates `VERSION` and the
-changelog. Merging that pull request causes the release workflow to build the
-archives and checksums, create the matching `vX.Y.Z` tag, and publish the
-release with the installer scripts as immutable release assets. Existing
-versions are not republished and existing tags are never moved. Users with
-stricter supply-chain requirements should download a release and checksum
-separately, inspect the scripts, and run the platform setup script locally.
+changelog. Merging that pull request causes the release workflow to build and
+smoke-test the installers, archives, and checksums before creating the matching
+tag and release. Existing versions are not republished and existing tags are
+never moved. Users with stricter supply-chain requirements should download a
+release and checksum separately, inspect the scripts, and run the platform
+setup script locally.
 
 ## Supported versions
 
