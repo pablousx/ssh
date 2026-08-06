@@ -6,6 +6,8 @@ release pull request.
 
 ## Unreleased
 
+## [1.3.1](https://github.com/pablousx/sshwitch/compare/v1.3.0...v1.3.1) (2026-08-06)
+
 ### Fixed
 
 - Stamped release installers now accept their embedded version, and source
@@ -15,7 +17,7 @@ release pull request.
   versions, cancels stale CI runs, performs ShellCheck once on Linux, and runs
   release publishing only when `VERSION` changes.
 - ShellCheck and PSScriptAnalyzer no longer fail on intentional test and
-  portability patterns.
+  portability patterns. See [ad53df8](https://github.com/pablousx/sshwitch/commit/ad53df816f7849ede1db778723cbebe2ec1509a3).
 
 ## [1.3.0](https://github.com/pablousx/sshwitch/compare/v1.2.1...v1.3.0) (2026-08-06)
 
