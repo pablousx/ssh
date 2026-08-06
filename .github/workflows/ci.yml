@@ -3,7 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - .release-please-manifest.json
+      - CHANGELOG.md
+      - VERSION
   pull_request:
+    paths-ignore:
+      - .release-please-manifest.json
+      - CHANGELOG.md
+      - VERSION
 
 permissions:
   contents: read

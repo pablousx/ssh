@@ -6,6 +6,11 @@ release pull request.
 
 ## Unreleased
 
+### Fixed
+
+- Missing managed Git signing keys now restore SSHwitch-owned global Git
+  settings instead of leaving Git configured to use a nonexistent key.
+
 ## [1.3.1](https://github.com/pablousx/sshwitch/compare/v1.3.0...v1.3.1) (2026-08-06)
 
 ### Fixed

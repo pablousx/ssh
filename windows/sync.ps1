@@ -515,6 +515,25 @@ function Restore-OwnedGitValue {
     Remove-Item -LiteralPath $statePath -Force
 }
 
+function Restore-OwnedGitSigning {
+    param([hashtable]$Paths)
+    $stateFiles = @(
+        "allowed-signers-file.json",
+        "commit-gpgsign.json",
+        "user-signingkey.json",
+        "gpg-format.json"
+    )
+    if (@($stateFiles | Where-Object {
+                Test-Path -LiteralPath (Join-Path $Paths.GitStateDir $_)
+            }).Count -gt 0) {
+        Ensure-Command git
+    }
+    Restore-OwnedGitValue $Paths "allowed-signers-file"
+    Restore-OwnedGitValue $Paths "commit-gpgsign"
+    Restore-OwnedGitValue $Paths "user-signingkey"
+    Restore-OwnedGitValue $Paths "gpg-format"
+}
+
 function Update-GitSigning {
     param([hashtable]$Paths, $Preferences)
     if ($Preferences.commit_signing -eq "skip") { return }
@@ -522,9 +541,10 @@ function Update-GitSigning {
     if ($Preferences.commit_signing -eq "yes") {
         $signingKey = Join-Path $Paths.CurrentDir "keys\git-sign.pub"
         if (-not (Test-Path -LiteralPath $signingKey)) {
+            Restore-OwnedGitSigning -Paths $Paths
             Write-Warning (
                 "Git signing is enabled, but no 'git-sign' public key was found; " +
-                "SSH configuration was synced without updating Git signing settings."
+                "SSH configuration was synced and SSHwitch-owned Git signing settings were restored."
             )
             return
         }
@@ -537,11 +557,7 @@ function Update-GitSigning {
             Set-OwnedGitValue $Paths "gpg.ssh.allowedSignersFile" "allowed-signers-file" $allowed
         }
     } else {
-        Ensure-Command git
-        Restore-OwnedGitValue $Paths "allowed-signers-file"
-        Restore-OwnedGitValue $Paths "commit-gpgsign"
-        Restore-OwnedGitValue $Paths "user-signingkey"
-        Restore-OwnedGitValue $Paths "gpg-format"
+        Restore-OwnedGitSigning -Paths $Paths
     }
 }
 

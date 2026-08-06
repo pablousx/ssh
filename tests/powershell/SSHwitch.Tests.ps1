@@ -183,15 +183,54 @@ Describe "SSHwitch source safety" {
         }
     }
 
-    It "warns instead of failing when the Git signing key is missing" {
+    It "restores owned Git settings when the Git signing key is missing" {
         $currentDir = Join-Path $TestDrive "missing-signing-key"
+        $gitStateDir = Join-Path $TestDrive "missing-signing-key-state"
         [System.IO.Directory]::CreateDirectory($currentDir) | Out-Null
-        $warnings = @(Update-GitSigning `
-            -Paths @{ CurrentDir = $currentDir } `
-            -Preferences ([pscustomobject]@{ commit_signing = "yes" }) 3>&1)
-        if (($warnings | Out-String) -notmatch
-            "SSH configuration was synced without updating Git signing settings") {
-            throw "A missing git-sign key did not emit the expected warning."
+        [System.IO.Directory]::CreateDirectory($gitStateDir) | Out-Null
+        Write-Utf8NoBom -Path (Join-Path $gitStateDir "gpg-format.json") -Content (
+            '{"key":"gpg.format","present":true,"previous":"openpgp","owned":"ssh"}' + "`n"
+        )
+        Write-Utf8NoBom -Path (Join-Path $gitStateDir "commit-gpgsign.json") -Content (
+            '{"key":"commit.gpgsign","present":false,"previous":"","owned":"true"}' + "`n"
+        )
+        $script:testGitValues = @{ "gpg.format" = "ssh"; "commit.gpgsign" = "true" }
+        function global:git {
+            if ($args[0] -ne "config" -or $args[1] -ne "--global") {
+                throw "Unexpected mock git arguments: $args"
+            }
+            if ($args[2] -eq "--get") {
+                $key = [string]$args[3]
+                if ($script:testGitValues.ContainsKey($key)) {
+                    $global:LASTEXITCODE = 0
+                    return $script:testGitValues[$key]
+                }
+                $global:LASTEXITCODE = 1
+                return
+            }
+            if ($args[2] -eq "--unset-all") {
+                [void]$script:testGitValues.Remove([string]$args[3])
+                $global:LASTEXITCODE = 0
+                return
+            }
+            $script:testGitValues[[string]$args[2]] = [string]$args[3]
+            $global:LASTEXITCODE = 0
+        }
+        try {
+            $warnings = @(Update-GitSigning `
+                -Paths @{ CurrentDir = $currentDir; GitStateDir = $gitStateDir } `
+                -Preferences ([pscustomobject]@{ commit_signing = "yes" }) 3>&1)
+            $warningText = (($warnings | ForEach-Object { $_.ToString() }) -join " ")
+            if ($warningText -notmatch
+                "SSHwitch-owned Git signing settings were restored") {
+                throw "A missing git-sign key did not emit the expected warning."
+            }
+            if ($script:testGitValues["gpg.format"] -ne "openpgp" -or
+                $script:testGitValues.ContainsKey("commit.gpgsign")) {
+                throw "A missing git-sign key left SSHwitch-owned Git signing enabled."
+            }
+        } finally {
+            Remove-Item -Path Function:\git -Force
         }
     }
 

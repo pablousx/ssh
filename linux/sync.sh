@@ -278,6 +278,22 @@ restore_owned_git_value() {
     rm -rf -- "$key_dir"
 }
 
+restore_owned_git_signing() {
+    git_state_exists=false
+    for slug in allowed-signers-file commit-gpgsign user-signingkey gpg-format; do
+        if [ -d "$GIT_STATE_DIR/$slug" ]; then
+            git_state_exists=true
+            break
+        fi
+    done
+    [ "$git_state_exists" = false ] || require_command git
+
+    restore_owned_git_value gpg.ssh.allowedSignersFile allowed-signers-file
+    restore_owned_git_value commit.gpgsign commit-gpgsign
+    restore_owned_git_value user.signingkey user-signingkey
+    restore_owned_git_value gpg.format gpg-format
+}
+
 apply_git_signing() {
     signing_pref=$1
     sign_key_path=$2
@@ -287,7 +303,8 @@ apply_git_signing() {
 
     if [ "$signing_pref" = "yes" ]; then
         if [ ! -f "$sign_key_path" ]; then
-            log_warn "Git signing is enabled, but no 'git-sign' public key was found; SSH configuration was synced without updating Git signing settings."
+            restore_owned_git_signing
+            log_warn "Git signing is enabled, but no 'git-sign' public key was found; SSH configuration was synced and SSHwitch-owned Git signing settings were restored."
             return 0
         fi
         require_command git
@@ -298,11 +315,7 @@ apply_git_signing() {
             set_owned_git_value gpg.ssh.allowedSignersFile allowed-signers-file "$allowed_signers_path"
         fi
     elif [ "$signing_pref" = "no" ]; then
-        require_command git
-        restore_owned_git_value gpg.ssh.allowedSignersFile allowed-signers-file
-        restore_owned_git_value commit.gpgsign commit-gpgsign
-        restore_owned_git_value user.signingkey user-signingkey
-        restore_owned_git_value gpg.format gpg-format
+        restore_owned_git_signing
     else
         die "Invalid commit_signing preference: $signing_pref"
     fi

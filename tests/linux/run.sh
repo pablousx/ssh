@@ -382,15 +382,22 @@ pass "Git signing settings are restored"
 
 new_home git_signing_key_missing
 write_preferences agent yes
+export MOCK_ITEMS_MODE=git-sign
+git config --global gpg.format openpgp
+run_sync
+[ "$(git config --global gpg.format)" = "ssh" ] || fail "Git signing was not enabled before key removal"
+unset MOCK_ITEMS_MODE
 missing_signing_output=$(run_sync 2>&1) ||
     fail "A missing git-sign key unexpectedly prevented SSH synchronization"
 printf '%s' "$missing_signing_output" |
-    grep -qF "SSH configuration was synced without updating Git signing settings" ||
+    grep -qF "SSHwitch-owned Git signing settings were restored" ||
     fail "A missing git-sign key did not emit the expected warning"
 assert_file "$HOME/.ssh/sshwitch/current/config"
+[ "$(git config --global gpg.format)" = "openpgp" ] ||
+    fail "A missing git-sign key did not restore the previous gpg.format"
 if git config --global --get commit.gpgsign >/dev/null 2>&1; then
-    fail "Git signing was changed without a git-sign key"
+    fail "A missing git-sign key left commit signing enabled"
 fi
-pass "missing Git signing key warns without preventing SSH synchronization"
+pass "missing Git signing key restores owned settings without preventing SSH synchronization"
 
 printf "\nAll %s POSIX integration tests passed.\n" "$PASS_COUNT"
