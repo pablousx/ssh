@@ -12,6 +12,13 @@ release pull request.
   the stale `v1.1.0`, so both pinned and `latest` installation URLs download
   the matching release archives.
 
+## [1.3.0](https://github.com/pablousx/sshwitch/compare/v1.2.1...v1.3.0) (2026-08-06)
+
+
+### Features
+
+* embed release version in installer scripts and update changelog ([15588c3](https://github.com/pablousx/sshwitch/commit/15588c3261ad359ff19855f28524ef04cb3ff08d))
+
 ## [1.2.1](https://github.com/pablousx/sshwitch/compare/v1.2.0...v1.2.1) (2026-08-05)
 
 
